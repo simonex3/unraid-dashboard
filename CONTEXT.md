@@ -6,12 +6,13 @@ Modernes Web-Dashboard für Unraid Server, läuft als Docker Container auf dem S
 ## Server
 - IP: 192.168.178.112
 - SSH: root@192.168.178.112 (Key-Auth, kein Passwort)
-- Dashboard Port: 8888 -> http://192.168.178.112:8888
+- Dashboard Port: 8888 → http://192.168.178.112:8888
 - Dateien auf Server: /boot/config/plugins/dockerMan/unraid-dashboard/
 
 ## Unraid GraphQL API
 - Endpoint: http://192.168.178.112/graphql
-- Auth Header: x-api-key: 1976740970e7dcf51c8ff2863232bad9b52f732c8b730a9d0ab622e664a8c833
+- Auth Header: `x-api-key: YOUR_UNRAID_API_KEY`
+- Key-Ablage lokal: nur in `index.html.local` (nie committen!)
 
 ## Funktionierende GraphQL Queries (verifiziert)
 ```graphql
@@ -32,67 +33,82 @@ query { vms { domain { name state } } }
 
 # Server Info
 query { vars { name } info { os { uptime hostname } versions { core { unraid } } } }
-
-# Netzwerk (Status: noch nicht verifiziert, wird mit Fallback abgefragt)
-query { network { interfaces { name rxBytes txBytes } } }
-# Fallback:
-query { metrics { network { interfaces { name rxBytes txBytes } } } }
 ```
 
-## Bekannte Eigenheiten / wichtige Hinweise
-- **Disk-Größen** werden in KB geliefert -> `fmtKB()` verwenden
-- **Memory-Werte** werden in Bytes geliefert -> `fmtBytes()` verwenden
-- **memory.free** = wirklich freier RAM (sehr klein, da Linux Speicher als Cache nutzt)
-  - "Verfügbar" korrekt berechnen als `total - used` (= free + buffcache)
-  - Gauge-Prozent: `used / total * 100` (nicht `percentTotal`, der ggf. Cache einrechnet)
-- **Netzwerk-Query** ist noch nicht gegen die API verifiziert; Fehler werden still abgefangen
-- **VMs**: Kein `type`-Feld im Schema vorhanden (wurde entfernt)
-- **Server Info**: `server { name version uptime }` existiert nicht; korrekte Felder: `vars { name }` und `info { ... }`
+## Nicht verfügbare GraphQL Felder (verifiziert per Introspection)
+- `network { ... }` → existiert NICHT im Schema
+- `metrics { network { ... } }` → existiert NICHT im Schema
+- Netzwerk-Daten kommen stattdessen via Python-Backend aus `/proc/net/dev`
 
-## Gelöste Probleme (Changelog)
-| Datum      | Problem / Feature                          | Lösung                                                    |
-|------------|--------------------------------------------|-----------------------------------------------------------|
-| 2026-02-25 | RAM-Anzeige zeigte falschen "freien" Wert  | Verfügbar = `total - used`, Gauge auf `used/total*100`    |
-| 2026-02-25 | CPU nur als Gauge, kein Verlauf            | Sparkline (SVG Area-Chart, 30 Punkte History)             |
-| 2026-02-25 | Netzwerk nicht dargestellt                 | Neues Netzwerk-Card mit RX/TX Graphen (delta/s)           |
-| 2026-02-25 | Schrift schlecht lesbar (zu klein/dunkel)  | --muted auf #94a3b8, Mindest-Fontgröße 11-12px            |
-| 2026-02-25 | Speedtest ohne Historie                    | Modal mit localStorage-Historie, Trend-Sparklines, Tabelle |
-| 2026-02-25 | Array zeigte nur `disks`, nicht Parities   | Query auf parities + disks + caches erweitert             |
+## Bekannte Eigenheiten / wichtige Hinweise
+
+### RAM
+- `memory.used` = `total - free` (enthält buffcache!) → NICHT direkt für Prozent verwenden
+- `memory.percentTotal` = korrekte Metrik (API berechnet intern aus `MemAvailable`) → diese verwenden
+- Echte App-Nutzung in Bytes: `used - buffcache`
+- Beispiel-Werte: total=31.1GB, used=30.9GB, free=230MB, buffcache=25.1GB, percentTotal=77.67%
+
+### Disk / Shares
+- Disk-Größen und Share-Größen werden in **KB** geliefert → `fmtKB()` verwenden
+- Memory-Werte in **Bytes** → `fmtBytes()` verwenden
+
+### Netzwerk
+- Kein GraphQL-Feld → Python-Backend liest `/proc/net/dev` des Hosts
+- Endpoint: `GET /api/network` → `{interface, rxBytes, txBytes, ts}`
+- Container muss mit `--network host` laufen, sonst sieht er nur Container-Interfaces
+- Interface-Präferenz: bond0 > eth0 > eth1 > ..., ignoriert lo/veth*/br-*/docker0/virbr0
+
+### Speedtest Ping
+- Früher: HTTPS-Roundtrip gemessen (DNS + TCP + TLS + HTTP) → ~300ms (falsch!)
+- Jetzt: echter ICMP-Ping via `ping -c 5 1.1.1.1` (Cloudflare Anycast) → ~19ms
+- Alpine/Busybox ping-Format: `round-trip min/avg/max = X/Y/Z ms` (kein mdev, kein "rtt")
+
+### Sonstiges
+- VMs: Kein `type`-Feld im Schema vorhanden
+- Server Info: `server { ... }` existiert nicht → `vars { name }` und `info { ... }` verwenden
+
+## Changelog
+| Datum      | Problem / Feature                            | Lösung                                                          |
+|------------|----------------------------------------------|-----------------------------------------------------------------|
+| 2026-02-25 | RAM zeigte falschen "freien" Wert            | Verfügbar = `free + buffcache`, Gauge = `memory.percentTotal`   |
+| 2026-02-25 | CPU nur als Gauge, kein Verlauf              | SVG Sparkline, 30 Punkte History in `cpuHistory[]`              |
+| 2026-02-25 | Netzwerk fehlte komplett                     | Python-Backend liest `/proc/net/dev`, `--network host` nötig    |
+| 2026-02-25 | Schrift schlecht lesbar                      | `--muted` auf #94a3b8, Mindest-Fontgröße 11-12px               |
+| 2026-02-25 | Speedtest ohne Historie                      | Modal mit localStorage (50 Einträge), Sparklines, CSV-Export    |
+| 2026-02-25 | Array zeigte nur `disks`                     | Query auf parities + disks + caches erweitert                   |
+| 2026-02-25 | RAM-Gauge zeigte 99% (falscher Algorithmus)  | Zurück zu `memory.percentTotal` (API-Wert ist korrekt)          |
+| 2026-02-25 | RAM-Gauge zeigte 19% (zu aggressiver Fix)    | `used - buffcache` war falsch, da `used` schon buffcache enthält|
+| 2026-02-25 | Netzwerk-Graph leer (kein GraphQL-Feld)      | `/api/network` Endpoint im Python-Backend, liest /proc/net/dev  |
+| 2026-02-25 | Netzwerk zeigte Container-IFs statt Host-IFs | Container auf `--network host` umgestellt                       |
+| 2026-02-25 | Speedtest Ping viel zu hoch (~300ms)         | ICMP-Ping via `subprocess ping 1.1.1.1`, Busybox-Regex fix      |
 
 ## Offene TODOs
-- Netzwerk-Query gegen API verifizieren (rxBytes/txBytes Feldnamen prüfen)
-- Speedtest: Server-seitige Historie (aktuell nur localStorage = browserseitig)
-- GitHub Remote: https://github.com/simonex3/unraid-dashboard (privat, verbunden)
+- Speedtest-Historie: aktuell nur localStorage (browserseitig), keine Server-Persistenz
+- RAM: kein `MemAvailable`-Feld in der API — Bytes-Anzeige weicht vom Gauge-% ab
 
 ## GitHub Workflow
 
 **Datei-Struktur:**
-- `index.html`        → Sanitized (Placeholder-Key) — in Git, öffentlich teilbar
+- `index.html`        → Sanitized (API Key = Placeholder) — in Git
 - `index.html.local`  → Echte Credentials — NIEMALS committen, in `.gitignore`
+- `CONTEXT.md`        → Wird ebenfalls sanitized (API Key ersetzt)
 
 **Zum GitHub pushen:**
 ```bash
 bash publish.sh "Beschreibung der Änderung"
 ```
-Das Skript ersetzt automatisch den echten API Key mit `YOUR_UNRAID_API_KEY` bevor es pusht.
+Das Skript ersetzt automatisch den echten API Key in `index.html` und `CONTEXT.md`.
 
 **Für lokale Entwicklung und Deployments immer `index.html.local` bearbeiten!**
-
-**GitHub Repo einrichten (einmalig, falls noch nicht gemacht):**
-```bash
-# 1. Repo auf github.com erstellen (privat)
-# 2. Remote verbinden:
-git remote add origin https://github.com/DEIN_USERNAME/unraid-dashboard.git
-git push -u origin master
-```
 
 ## Deploy-Workflow
 ```bash
 # Alle Dateien auf Server kopieren
-scp index.html Dockerfile nginx.conf speedtest_server.py start.sh \
+scp index.html.local root@192.168.178.112:/boot/config/plugins/dockerMan/unraid-dashboard/index.html
+scp Dockerfile nginx.conf speedtest_server.py start.sh \
     root@192.168.178.112:/boot/config/plugins/dockerMan/unraid-dashboard/
 
-# Container neu bauen und starten
+# Container neu bauen und starten (--network host für Netzwerk-Stats!)
 ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && \
     docker build -t unraid-dashboard:latest . && \
     docker stop unraid-dashboard && \
@@ -102,18 +118,19 @@ ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && 
 ```
 
 ## Architektur / Design-Entscheidungen
-- **Kein Framework** - reines HTML/CSS/JS, eine einzige index.html
+- **Kein Framework** — reines HTML/CSS/JS, eine einzige `index.html`
 - **Polling** alle 15 Sekunden via `setInterval(loadAll, 15000)`
-- **Netzwerk-Graph**: Delta zwischen zwei Messungen / verstrichene Zeit = Bytes/s
-- **CPU-Sparkline**: `cpuHistory[]` Array (max 30), wird bei jedem `renderMetrics()` befüllt
+- **Netzwerk-Graph**: `/api/network` alle 15s pollen, Delta rxBytes/txBytes / Δt = Bytes/s
+- **CPU-Sparkline**: `cpuHistory[]` Array (max 30 Punkte), SVG Area-Chart
 - **Speedtest-Historie**: `localStorage` Key `unraid_speedtest_history`, max 50 Einträge (JSON)
-- **Fehlerbehandlung**: Jede GQL-Query hat `.catch()` - ein Fehler blockiert nicht die anderen
+- **Fehlerbehandlung**: Jede GQL-Query hat `.catch()` — ein Fehler blockiert nicht die anderen
 - **Gauge-Circumference**: C = 226.19 (Kreis r=36, 2π×36 ≈ 226.19)
+- **Sparkline-Formel**: `y = height - (value / max) * (height - 4) - 2` (2px Padding)
 
 ## Tech Stack
 - Reines HTML/CSS/JS (kein Framework)
-- nginx:alpine Docker Container
-- Python 3 (speedtest_server.py, Port 8889 intern, via nginx auf 8888 proxied)
+- nginx:alpine Docker Container, läuft mit `--network host`
+- Python 3 (`speedtest_server.py`, Port 8889 intern, nginx proxied /api/speedtest + /api/network)
 - Font: Syne (Überschriften) + Space Mono (Monospace/Daten) via Google Fonts
 - Design: Dark Theme, Orange Akzentfarbe (#f97316)
 
@@ -133,9 +150,11 @@ ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && 
 ```
 
 ## Projektdateien
-- `index.html`           -> Das Dashboard (alle UI + JS)
-- `Dockerfile`           -> Docker Build (nginx:alpine + python3)
-- `nginx.conf`           -> nginx auf Port 8888, proxied /api/speedtest -> 8889
-- `speedtest_server.py`  -> Python HTTP Server Port 8889, misst gegen speed.cloudflare.com
-- `start.sh`             -> Startet Python-Backend + nginx
-- `CONTEXT.md`           -> Diese Datei
+- `index.html`           → Das Dashboard (alle UI + JS), sanitized für Git
+- `index.html.local`     → Wie index.html, aber mit echten Credentials (nur lokal)
+- `Dockerfile`           → Docker Build (nginx:alpine + python3)
+- `nginx.conf`           → nginx Port 8888, proxied /api/speedtest + /api/network → 8889
+- `speedtest_server.py`  → Python HTTP Server Port 8889: Speedtest + /proc/net/dev
+- `start.sh`             → Startet Python-Backend + nginx
+- `publish.sh`           → Sanitized index.html + CONTEXT.md und pusht zu GitHub
+- `CONTEXT.md`           → Diese Datei
