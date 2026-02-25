@@ -255,6 +255,28 @@
       border-radius: 6px; cursor: pointer; transition: all .2s; white-space: nowrap;
     }
     .st-detail-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .title-btn {
+      margin-left: auto; background: none; border: 1px solid var(--border); color: var(--muted);
+      font-family: var(--fm); font-size: 10px; letter-spacing: 1px; border-radius: 6px; padding: 2px 8px;
+      cursor: pointer; transition: all .2s;
+    }
+    .title-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .range-row {
+      display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 12px;
+    }
+    .range-row label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+    .range-select, .cron-input {
+      background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+      font-family: var(--fm); font-size: 12px; padding: 6px 8px;
+    }
+    .cron-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    .cron-row label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .cron-input { width: 90px; }
+    .cron-save-btn {
+      padding: 7px 10px; background: none; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 6px; font-family: var(--fm); font-size: 11px; cursor: pointer; transition: all .2s;
+    }
+    .cron-save-btn:hover { border-color: var(--accent); color: var(--accent); }
 
     /* MODAL */
     .modal-overlay {
@@ -375,7 +397,7 @@
 
     <!-- CPU GAUGE + GRAPH -->
     <div class="card c4" style="animation-delay:.08s">
-      <div class="card-title">CPU Auslastung</div>
+      <div class="card-title">CPU Auslastung <button class="title-btn" onclick="openCPUModal()">DETAILS</button></div>
       <div class="gauge-row">
         <div class="gauge">
           <svg viewBox="0 0 86 86" width="86" height="86">
@@ -436,7 +458,7 @@
 
     <!-- NETWORK GRAPH -->
     <div class="card c12" style="animation-delay:.18s">
-      <div class="card-title">Netzwerk Auslastung <span id="net-iface" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px"></span></div>
+      <div class="card-title">Netzwerk Auslastung <span id="net-iface" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px"></span><button class="title-btn" onclick="openNetModal()">DETAILS</button></div>
       <div class="net-row">
         <div class="net-side">
           <div class="net-head">
@@ -538,11 +560,87 @@
         <button class="speedtest-btn" id="speedtest-btn" onclick="runSpeedtest()">&#9654; STARTEN</button>
         <button class="st-detail-btn" onclick="openSTModal()">&#9776; DETAILS</button>
       </div>
+      <div class="cron-row">
+        <label for="st-cron-min">Cron (Minuten)</label>
+        <input class="cron-input" id="st-cron-min" type="number" min="0" step="1" value="240" />
+        <button class="cron-save-btn" onclick="saveSpeedtestCron()">SPEICHERN</button>
+      </div>
       <div class="st-note">Misst direkt vom Unraid-Server gegen Cloudflare Speedtest</div>
     </div>
 
   </div>
   <div class="last-update" id="last-update">Lade Daten...</div>
+</div>
+
+<!-- CPU DETAIL MODAL -->
+<div class="modal-overlay" id="cpu-modal" onclick="closeCPUModalBg(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">CPU <span>Verlauf</span></div>
+      <button class="modal-close" onclick="closeCPUModal()">&#10005;</button>
+    </div>
+    <div class="range-row">
+      <label for="cpu-range">Zeitraum</label>
+      <select class="range-select" id="cpu-range" onchange="renderCPUModal()">
+        <option value="1h">1 Stunde</option>
+        <option value="6h">6 Stunden</option>
+        <option value="24h" selected>24 Stunden</option>
+        <option value="7d">7 Tage</option>
+        <option value="14d">14 Tage</option>
+      </select>
+    </div>
+    <div class="hist-summary">
+      <div class="hist-stat"><div class="hist-stat-val" id="cpu-avg">—</div><div class="hist-stat-lbl">Ø CPU</div></div>
+      <div class="hist-stat"><div class="hist-stat-val" id="cpu-max">—</div><div class="hist-stat-lbl">Max CPU</div></div>
+      <div class="hist-stat"><div class="hist-stat-val" id="cpu-cur">—</div><div class="hist-stat-lbl">Aktuell</div></div>
+    </div>
+    <div class="hist-spark-item" style="margin-bottom:18px">
+      <div class="hist-spark-label">CPU Trend</div>
+      <svg width="100%" viewBox="0 0 400 90" preserveAspectRatio="none" height="90" id="cpu-detail-svg"></svg>
+    </div>
+    <div class="hist-table-wrap">
+      <table class="hist-table">
+        <thead><tr><th>#</th><th>Datum / Zeit</th><th>CPU</th></tr></thead>
+        <tbody id="cpu-detail-tbody"><tr><td colspan="3" class="hist-empty">Keine CPU-Daten.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- NETWORK DETAIL MODAL -->
+<div class="modal-overlay" id="net-modal" onclick="closeNetModalBg(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Netzwerk <span>Verlauf</span></div>
+      <button class="modal-close" onclick="closeNetModal()">&#10005;</button>
+    </div>
+    <div class="range-row">
+      <label for="net-range">Zeitraum</label>
+      <select class="range-select" id="net-range" onchange="renderNetModal()">
+        <option value="1h">1 Stunde</option>
+        <option value="6h">6 Stunden</option>
+        <option value="24h" selected>24 Stunden</option>
+        <option value="7d">7 Tage</option>
+        <option value="14d">14 Tage</option>
+      </select>
+    </div>
+    <div class="hist-summary">
+      <div class="hist-stat"><div class="hist-stat-val" id="net-avg-rx" style="color:var(--green)">—</div><div class="hist-stat-lbl">Ø Download</div></div>
+      <div class="hist-stat"><div class="hist-stat-val" id="net-avg-tx" style="color:var(--blue)">—</div><div class="hist-stat-lbl">Ø Upload</div></div>
+      <div class="hist-stat"><div class="hist-stat-val" id="net-cur-sum" style="color:var(--accent)">—</div><div class="hist-stat-lbl">Aktuell Summe</div></div>
+    </div>
+    <div class="hist-spark-row">
+      <div class="hist-spark-item"><div class="hist-spark-label">Download Trend</div><svg width="100%" viewBox="0 0 200 70" preserveAspectRatio="none" height="70" id="net-detail-rx-svg"></svg></div>
+      <div class="hist-spark-item"><div class="hist-spark-label">Upload Trend</div><svg width="100%" viewBox="0 0 200 70" preserveAspectRatio="none" height="70" id="net-detail-tx-svg"></svg></div>
+      <div class="hist-spark-item"><div class="hist-spark-label">Gesamt Trend</div><svg width="100%" viewBox="0 0 200 70" preserveAspectRatio="none" height="70" id="net-detail-sum-svg"></svg></div>
+    </div>
+    <div class="hist-table-wrap">
+      <table class="hist-table">
+        <thead><tr><th>#</th><th>Datum / Zeit</th><th>Download</th><th>Upload</th></tr></thead>
+        <tbody id="net-detail-tbody"><tr><td colspan="4" class="hist-empty">Keine Netzwerk-Daten.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- SPEEDTEST MODAL -->
@@ -625,10 +723,14 @@
   const CPU_HISTORY_KEY = 'unraid_cpu_history_v1';
   const CPU_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
   const CPU_HISTORY_SAMPLE_MS = 60 * 1000;
+  const NET_HISTORY_KEY = 'unraid_net_history_v1';
+  const NET_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+  const NET_HISTORY_SAMPLE_MS = 60 * 1000;
 
   // ── history buffers ───────────────────────────────────────────────
   const cpuSparkHistory = [];
   const cpuHistory = loadCPUHistory();
+  const netHistory = loadNetHistory();
   const netRxHist  = [];
   const netTxHist  = [];
   const stHistoryCache = [];
@@ -735,6 +837,186 @@
     return sampled;
   }
 
+  function loadNetHistory() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(NET_HISTORY_KEY) || '[]');
+      const now = Date.now();
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((entry) =>
+          entry &&
+          Number.isFinite(entry.ts) &&
+          Number.isFinite(entry.rx) &&
+          Number.isFinite(entry.tx) &&
+          entry.ts >= (now - NET_HISTORY_RETENTION_MS)
+        )
+        .map((entry) => ({ ts: entry.ts, rx: Math.max(0, entry.rx), tx: Math.max(0, entry.tx) }));
+    } catch {
+      return [];
+    }
+  }
+
+  function persistNetHistory() {
+    localStorage.setItem(NET_HISTORY_KEY, JSON.stringify(netHistory));
+  }
+
+  function recordNetPoint(rxRate, txRate) {
+    const now = Date.now();
+    const last = netHistory[netHistory.length - 1];
+    if (!last || (now - last.ts) >= NET_HISTORY_SAMPLE_MS) {
+      netHistory.push({ ts: now, rx: rxRate, tx: txRate });
+    } else {
+      last.rx = rxRate;
+      last.tx = txRate;
+    }
+    while (netHistory.length && netHistory[0].ts < (now - NET_HISTORY_RETENTION_MS)) {
+      netHistory.shift();
+    }
+    persistNetHistory();
+  }
+
+  function parseRangeMs(range) {
+    if (range === '1h') return 60 * 60 * 1000;
+    if (range === '6h') return 6 * 60 * 60 * 1000;
+    if (range === '24h') return 24 * 60 * 60 * 1000;
+    if (range === '7d') return 7 * 24 * 60 * 60 * 1000;
+    return 14 * 24 * 60 * 60 * 1000;
+  }
+
+  function filterByRange(history, range) {
+    const cutoff = Date.now() - parseRangeMs(range);
+    return history.filter((entry) => entry.ts >= cutoff);
+  }
+
+  function toLimitedSeries(values, maxPoints = 400) {
+    if (values.length <= maxPoints) return values;
+    const step = values.length / maxPoints;
+    const sampled = [];
+    for (let i = 0; i < maxPoints; i++) sampled.push(values[Math.floor(i * step)]);
+    return sampled;
+  }
+
+  function avg(arr) {
+    if (!arr.length) return 0;
+    return arr.reduce((s, v) => s + v, 0) / arr.length;
+  }
+
+  function openCPUModal() {
+    renderCPUModal();
+    document.getElementById('cpu-modal').classList.add('open');
+  }
+  function closeCPUModal() {
+    document.getElementById('cpu-modal').classList.remove('open');
+  }
+  function closeCPUModalBg(e) {
+    if (e.target === document.getElementById('cpu-modal')) closeCPUModal();
+  }
+
+  function renderCPUModal() {
+    const range = document.getElementById('cpu-range').value;
+    const data = filterByRange(cpuHistory, range);
+    const tbody = document.getElementById('cpu-detail-tbody');
+    if (!data.length) {
+      document.getElementById('cpu-avg').textContent = '—';
+      document.getElementById('cpu-max').textContent = '—';
+      document.getElementById('cpu-cur').textContent = '—';
+      document.getElementById('cpu-detail-svg').innerHTML = '';
+      tbody.innerHTML = '<tr><td colspan="3" class="hist-empty">Keine CPU-Daten im Zeitraum.</td></tr>';
+      return;
+    }
+    const values = data.map((d) => d.pct);
+    const current = values[values.length - 1];
+    const maximum = Math.max(...values);
+    const average = avg(values);
+    document.getElementById('cpu-avg').textContent = `${average.toFixed(1)}%`;
+    document.getElementById('cpu-max').textContent = `${maximum.toFixed(0)}%`;
+    document.getElementById('cpu-cur').textContent = `${current.toFixed(0)}%`;
+    const series = toLimitedSeries(values, 400);
+    if (series.length >= 2) drawSparkline('cpu-detail-svg', series, 'var(--accent)', 400, 90);
+
+    const rows = [...data].reverse().slice(0, 120);
+    tbody.innerHTML = rows.map((h, i) => {
+      const dt = new Date(h.ts);
+      const dateStr = dt.toLocaleDateString('de-DE') + ' ' + dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      return `<tr><td style="color:var(--muted)">${i + 1}</td><td style="color:var(--muted);font-size:11px">${dateStr}</td><td class="hist-ping">${h.pct.toFixed(0)}%</td></tr>`;
+    }).join('');
+  }
+
+  function openNetModal() {
+    renderNetModal();
+    document.getElementById('net-modal').classList.add('open');
+  }
+  function closeNetModal() {
+    document.getElementById('net-modal').classList.remove('open');
+  }
+  function closeNetModalBg(e) {
+    if (e.target === document.getElementById('net-modal')) closeNetModal();
+  }
+
+  function renderNetModal() {
+    const range = document.getElementById('net-range').value;
+    const data = filterByRange(netHistory, range);
+    const tbody = document.getElementById('net-detail-tbody');
+    if (!data.length) {
+      document.getElementById('net-avg-rx').textContent = '—';
+      document.getElementById('net-avg-tx').textContent = '—';
+      document.getElementById('net-cur-sum').textContent = '—';
+      ['net-detail-rx-svg', 'net-detail-tx-svg', 'net-detail-sum-svg'].forEach((id) => { document.getElementById(id).innerHTML = ''; });
+      tbody.innerHTML = '<tr><td colspan="4" class="hist-empty">Keine Netzwerk-Daten im Zeitraum.</td></tr>';
+      return;
+    }
+
+    const rx = data.map((d) => d.rx);
+    const tx = data.map((d) => d.tx);
+    const sum = data.map((d) => d.rx + d.tx);
+    document.getElementById('net-avg-rx').textContent = `${fmtRate(avg(rx)).val} ${fmtRate(avg(rx)).unit}`;
+    document.getElementById('net-avg-tx').textContent = `${fmtRate(avg(tx)).val} ${fmtRate(avg(tx)).unit}`;
+    const curSum = fmtRate(sum[sum.length - 1]);
+    document.getElementById('net-cur-sum').textContent = `${curSum.val} ${curSum.unit}`;
+
+    const rxSeries = toLimitedSeries(rx, 250);
+    const txSeries = toLimitedSeries(tx, 250);
+    const sumSeries = toLimitedSeries(sum, 250);
+    if (rxSeries.length >= 2) drawSparkline('net-detail-rx-svg', rxSeries, '#4ade80', 200, 70);
+    if (txSeries.length >= 2) drawSparkline('net-detail-tx-svg', txSeries, '#38bdf8', 200, 70);
+    if (sumSeries.length >= 2) drawSparkline('net-detail-sum-svg', sumSeries, 'var(--accent)', 200, 70);
+
+    const rows = [...data].reverse().slice(0, 120);
+    tbody.innerHTML = rows.map((h, i) => {
+      const dt = new Date(h.ts);
+      const dateStr = dt.toLocaleDateString('de-DE') + ' ' + dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      const rxFmt = fmtRate(h.rx);
+      const txFmt = fmtRate(h.tx);
+      return `<tr><td style="color:var(--muted)">${i + 1}</td><td style="color:var(--muted);font-size:11px">${dateStr}</td><td class="hist-dl">${rxFmt.val} ${rxFmt.unit}</td><td class="hist-ul">${txFmt.val} ${txFmt.unit}</td></tr>`;
+    }).join('');
+  }
+
+  async function loadSpeedtestConfig() {
+    try {
+      const resp = await fetch(`${API_BASE}/api/speedtest/config`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const cfg = await resp.json();
+      document.getElementById('st-cron-min').value = cfg.cronMinutes ?? 240;
+    } catch {
+      document.getElementById('st-cron-min').value = 240;
+    }
+  }
+
+  async function saveSpeedtestCron() {
+    const input = document.getElementById('st-cron-min');
+    const minutes = Math.max(0, parseInt(input.value || '0', 10));
+    input.value = String(minutes);
+    try {
+      const resp = await fetch(`${API_BASE}/api/speedtest/config?cronMinutes=${encodeURIComponent(minutes)}`, { method: 'POST' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      toast(minutes === 0 ? 'Speedtest-Cron deaktiviert' : `Speedtest-Cron gespeichert (${minutes} Min)`);
+      await refreshSTHistory();
+    } catch (e) {
+      console.error('saveSpeedtestCron', e);
+      toast('Cron-Konfiguration fehlgeschlagen');
+    }
+  }
+
   // ── sparkline drawing ────────────────────────────────────────────
   function drawSparkline(svgId, data, color, vbWidth=300, vbHeight=50) {
     const svg = document.getElementById(svgId);
@@ -792,6 +1074,7 @@
       if (cpuSeries.length >= 2) {
         drawSparkline('cpu-spark-svg', cpuSeries, 'var(--accent)');
       }
+      if (document.getElementById('cpu-modal').classList.contains('open')) renderCPUModal();
       document.getElementById('cpu-spark-cur').textContent = pct + '%';
       document.getElementById('cpu-spark-cur').style.color = pctColor(pct);
 
@@ -841,11 +1124,7 @@
   // ── network — reads /proc/net/dev via Python backend ─────────────
   async function loadNetwork() {
     try {
-      const port = location.port || '8888';
-      const resp = await fetch(
-        `${location.protocol}//${location.hostname}:${port}/api/network`,
-        { cache: 'no-store' }
-      );
+      const resp = await fetch(`${API_BASE}/api/network`, { cache: 'no-store' });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
@@ -887,6 +1166,7 @@
     if (elapsed > 0) {
       const rxRate = Math.max(0, (totalRx - _prevNet.rx) / elapsed);
       const txRate = Math.max(0, (totalTx - _prevNet.tx) / elapsed);
+      recordNetPoint(rxRate, txRate);
 
       netRxHist.push(rxRate);
       netTxHist.push(txRate);
@@ -905,6 +1185,7 @@
         drawSparkline('net-tx-svg', netTxHist, '#38bdf8', 300, 60);
         unavail.style.display = 'none';
       }
+      if (document.getElementById('net-modal').classList.contains('open')) renderNetModal();
     }
     _prevNet = { rx: totalRx, tx: totalTx };
     _prevNetTime = now;
@@ -1088,6 +1369,9 @@
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const payload = await resp.json();
       const history = normalizeSTHistory(payload.history || []);
+      if (payload.cronMinutes != null) {
+        document.getElementById('st-cron-min').value = String(payload.cronMinutes);
+      }
       stHistoryCache.splice(0, stHistoryCache.length, ...history);
       saveSTFallback(history);
       stHistoryLoaded = true;
@@ -1275,10 +1559,15 @@
 
   // Keyboard: Escape closes modal
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeSTModal();
+    if (e.key === 'Escape') {
+      closeSTModal();
+      closeCPUModal();
+      closeNetModal();
+    }
   });
 
   refreshSTHistory();
+  loadSpeedtestConfig();
   loadAll();
   setInterval(loadAll, 15000);
 </script>

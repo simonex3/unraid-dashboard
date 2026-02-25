@@ -10,12 +10,13 @@ import re
 import os
 import threading
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 PORT = 8889
 HOST = "127.0.0.1"
 STATE_FILE = os.environ.get("DASHBOARD_STATE_FILE", "/tmp/unraid_dashboard_state.json")
-SPEEDTEST_CRON_MINUTES = max(0, int(os.environ.get("SPEEDTEST_CRON_MINUTES", "240")))
+DEFAULT_SPEEDTEST_CRON_MINUTES = max(0, int(os.environ.get("SPEEDTEST_CRON_MINUTES", "240")))
+MAX_SPEEDTEST_CRON_MINUTES = 14 * 24 * 60
 SPEEDTEST_HISTORY_LIMIT = max(10, int(os.environ.get("SPEEDTEST_HISTORY_LIMIT", "500")))
 
 # Interfaces to prefer for network stats (in order)
@@ -26,7 +27,7 @@ _NET_IGNORE_PFX = ("veth", "br-", "vnet", "tun", "tap")
 
 _state_lock = threading.Lock()
 _speedtest_lock = threading.Lock()
-_state = {"speedtest_history": []}
+_state = {"speedtest_history": [], "speedtest_config": {"cron_minutes": DEFAULT_SPEEDTEST_CRON_MINUTES}}
 
 
 def now_iso():
@@ -50,6 +51,9 @@ def _load_state():
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
         history = raw.get("speedtest_history", []) if isinstance(raw, dict) else []
+        config_raw = raw.get("speedtest_config", {}) if isinstance(raw, dict) else {}
+        cron_minutes = int(config_raw.get("cron_minutes", DEFAULT_SPEEDTEST_CRON_MINUTES))
+        cron_minutes = max(0, min(MAX_SPEEDTEST_CRON_MINUTES, cron_minutes))
         if not isinstance(history, list):
             history = []
         cleaned = []
@@ -65,9 +69,12 @@ def _load_state():
                     "upload": entry.get("upload"),
                 }
             )
-        _state = {"speedtest_history": cleaned[:SPEEDTEST_HISTORY_LIMIT]}
+        _state = {
+            "speedtest_history": cleaned[:SPEEDTEST_HISTORY_LIMIT],
+            "speedtest_config": {"cron_minutes": cron_minutes},
+        }
     except Exception:
-        _state = {"speedtest_history": []}
+        _state = {"speedtest_history": [], "speedtest_config": {"cron_minutes": DEFAULT_SPEEDTEST_CRON_MINUTES}}
 
 
 def _save_state_locked():
@@ -100,6 +107,20 @@ def clear_speedtest_history():
     with _state_lock:
         _state["speedtest_history"] = []
         _save_state_locked()
+
+
+def get_cron_minutes():
+    with _state_lock:
+        return int(_state.get("speedtest_config", {}).get("cron_minutes", DEFAULT_SPEEDTEST_CRON_MINUTES))
+
+
+def set_cron_minutes(value):
+    minutes = max(0, min(MAX_SPEEDTEST_CRON_MINUTES, int(value)))
+    with _state_lock:
+        _state.setdefault("speedtest_config", {})
+        _state["speedtest_config"]["cron_minutes"] = minutes
+        _save_state_locked()
+    return minutes
 
 
 def read_net_dev():
@@ -223,18 +244,19 @@ def perform_speedtest(source="manual"):
 
 
 def should_run_cron():
+    cron_minutes = get_cron_minutes()
+    if cron_minutes <= 0:
+        return False
     history = get_speedtest_history()
     if not history:
         return True
     last_epoch = _parse_iso_to_epoch(history[0].get("ts"))
     if not last_epoch:
         return True
-    return (time.time() - last_epoch) >= SPEEDTEST_CRON_MINUTES * 60
+    return (time.time() - last_epoch) >= cron_minutes * 60
 
 
 def cron_worker():
-    if SPEEDTEST_CRON_MINUTES <= 0:
-        return
     while True:
         try:
             if should_run_cron():
@@ -251,8 +273,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.run_speedtest()
         elif path == "/api/speedtest/history":
             self.serve_speedtest_history()
+        elif path == "/api/speedtest/config":
+            self.serve_speedtest_config()
         elif path == "/api/network":
             self.serve_network()
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path == "/api/speedtest/config":
+            self.update_speedtest_config()
         else:
             self.send_error(404)
 
@@ -265,7 +296,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def serve_speedtest_history(self):
-        self._json({"history": get_speedtest_history(), "cronMinutes": SPEEDTEST_CRON_MINUTES})
+        self._json({"history": get_speedtest_history(), "cronMinutes": get_cron_minutes()})
+
+    def serve_speedtest_config(self):
+        self._json({"cronMinutes": get_cron_minutes(), "maxCronMinutes": MAX_SPEEDTEST_CRON_MINUTES})
+
+    def update_speedtest_config(self):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query or "")
+        if "cronMinutes" in query:
+            raw_value = query.get("cronMinutes", [None])[0]
+        else:
+            body = self._read_json_body()
+            raw_value = body.get("cronMinutes") if isinstance(body, dict) else None
+        if raw_value is None:
+            self._json({"error": "invalid payload"}, status=400)
+            return
+        try:
+            cron_minutes = set_cron_minutes(raw_value)
+        except Exception:
+            self._json({"error": "invalid cronMinutes"}, status=400)
+            return
+        self._json({"ok": True, "cronMinutes": cron_minutes})
 
     def serve_network(self):
         stats = read_net_dev()
@@ -296,6 +348,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except Exception:
+            return {}
 
     def log_message(self, fmt, *args):
         pass
