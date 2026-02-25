@@ -409,7 +409,7 @@
     </div>
     <div class="hright">
       <span class="server-pill" id="server-pill">HOST</span>
-      <button class="refresh-btn" onclick="loadAll()">&#8635; REFRESH</button>
+      <button class="refresh-btn" onclick="loadAll(true)">&#8635; REFRESH</button>
       <div class="conn-dot" id="conn-dot"></div>
     </div>
   </header>
@@ -599,6 +599,7 @@
         <button class="cron-save-btn" onclick="saveSpeedtestCron()">SPEICHERN</button>
       </div>
       <div class="st-note">Misst direkt vom Unraid-Server gegen Cloudflare Speedtest</div>
+      <div class="st-note" id="st-last" style="margin-top:4px"></div>
     </div>
 
   </div>
@@ -852,6 +853,9 @@
   let netUnitMode = (localStorage.getItem(NET_UNIT_KEY) || 'MBps');
   let _diagTapCount = 0;
   let _diagTapTimer = null;
+  let _bootIso = null;
+  let _lastLoadTime = 0;
+  const REFRESH_MS = 15000;
   let latestMetricsSnapshot = { cpuPct: null, ramPct: null, netRxBps: null, netTxBps: null };
   let lastSnapshotPushMs = 0;
   const apiDiag = {
@@ -989,11 +993,11 @@
   }
 
   async function gql(query) {
-    const r = await fetch(GQL, {
+    const r = await fetchWithTimeout(GQL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': KEY },
       body: JSON.stringify({ query })
-    });
+    }, 12000);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     if (j.errors) throw new Error(j.errors[0].message);
@@ -1008,6 +1012,9 @@
   }
   function pctColor(p) {
     return p > 85 ? 'var(--red)' : p > 60 ? 'var(--yellow)' : 'var(--green)';
+  }
+  function tempColor(t) {
+    return t >= 60 ? 'var(--red)' : t >= 50 ? 'var(--yellow)' : 'var(--green)';
   }
   function fmtBytes(b, dec=1) {
     if (b == null) return '—';
@@ -1604,6 +1611,7 @@
     const hostname = data.vars?.name || data.info?.os?.hostname || '—';
     const version  = data.info?.versions?.core?.unraid || '—';
     const bootIso  = data.info?.os?.uptime;
+    if (bootIso) _bootIso = bootIso;
     document.getElementById('c-host').textContent   = hostname;
     document.getElementById('c-ver').textContent    = version;
     document.getElementById('c-uptime').textContent = fmtUptime(bootIso);
@@ -1643,7 +1651,7 @@
         </div>
         <div class="disk-size">
           <span>${sizeStr}</span>
-          ${d.temp ? `<span>${d.temp}°C</span>` : ''}
+          ${d.temp ? `<span style="color:${tempColor(d.temp)}">${d.temp}°C</span>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -1715,12 +1723,20 @@
     }
     el.innerHTML = shares.map(s => {
       const free = fmtKB(s.free);
+      const usedPct = (s.size > 0) ? Math.round((s.size - s.free) / s.size * 100) : null;
+      const barColor = usedPct >= 85 ? 'var(--red)' : usedPct >= 70 ? 'var(--yellow)' : 'var(--accent)';
+      const barHtml = usedPct != null ? `
+        <div class="prog-bar" style="margin-top:6px">
+          <div class="prog-fill" style="width:${usedPct}%;background:${barColor}"></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px;text-align:right">${usedPct}% belegt</div>` : '';
       return `<div class="share-item">
         <div class="share-hd">
           <span class="share-name">${s.name}</span>
           <span class="share-free">${free} frei</span>
         </div>
         <div class="share-comment">${s.comment || ''}</div>
+        ${barHtml}
       </div>`;
     }).join('');
   }
@@ -1785,6 +1801,7 @@
       stHistoryCache.splice(0, stHistoryCache.length, ...history);
       saveSTFallback(history);
       stHistoryLoaded = true;
+      updateLastSpeedtestLabel();
       return history;
     } catch {
       if (!stHistoryLoaded) {
@@ -1948,6 +1965,16 @@
     }).join('');
   }
 
+  function updateLastSpeedtestLabel() {
+    const el = document.getElementById('st-last');
+    if (!el) return;
+    const last = stHistoryCache[0];
+    if (!last?.ts) { el.textContent = ''; return; }
+    const dt = new Date(last.ts);
+    el.textContent = 'Letzter Test: ' + dt.toLocaleDateString('de-DE') + ' ' +
+      dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  }
+
   // ── speedtest runner ─────────────────────────────────────────────
   async function runSpeedtest() {
     const btn = document.getElementById('speedtest-btn');
@@ -1985,7 +2012,8 @@
   }
 
   // ── main load ────────────────────────────────────────────────────
-  async function loadAll() {
+  async function loadAll(isManual = false) {
+    _lastLoadTime = Date.now();
     document.getElementById('error-banner').style.display = 'none';
     try {
       await refreshMetricsHistory();
@@ -2017,9 +2045,7 @@
       loadNetwork();
 
       setConn(true);
-      document.getElementById('last-update').textContent =
-        'Letzte Aktualisierung: ' + new Date().toLocaleTimeString('de-DE');
-      toast('Daten aktualisiert');
+      if (isManual) toast('Daten aktualisiert');
     } catch(e) {
       setConn(false);
       showErr(e.message);
@@ -2056,7 +2082,21 @@
   loadSpeedtestConfig();
   applyNetUnitMode();
   loadAll();
-  setInterval(loadAll, 15000);
+  setInterval(loadAll, REFRESH_MS);
+
+  // Live-Ticker: Uptime sekündlich + Countdown im Footer
+  setInterval(() => {
+    if (_bootIso) {
+      document.getElementById('c-uptime').textContent = fmtUptime(_bootIso);
+    }
+    if (_lastLoadTime > 0) {
+      const elapsed = (Date.now() - _lastLoadTime) / 1000;
+      const remaining = Math.max(0, Math.ceil(REFRESH_MS / 1000 - elapsed));
+      const timeStr = new Date(_lastLoadTime).toLocaleTimeString('de-DE');
+      document.getElementById('last-update').textContent =
+        `Letzte Aktualisierung: ${timeStr} · Refresh in ${remaining}s`;
+    }
+  }, 1000);
 </script>
 </body>
 </html>
