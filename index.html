@@ -754,15 +754,25 @@
   // ── KONFIGURATION ─────────────────────────────────────────────────
   // API Key: Unraid → Einstellungen → Management Access → API Key
   const UNRAID_API_KEY = 'YOUR_UNRAID_API_KEY';
+  const UNRAID_API_HOST = '';
+  const UNRAID_API_HTTP_PORT = '80';
+  const UNRAID_API_HTTPS_PORT = '443';
+  const UNRAID_GRAPHQL_URL = '';
   // ──────────────────────────────────────────────────────────────────
   const DASH_HOST = location.hostname || 'localhost';
   const DASH_PORT = location.port || '8888';
   const API_BASE = `${location.protocol}//${DASH_HOST}:${DASH_PORT}`;
+  const TARGET_API_HOST = (UNRAID_API_HOST || DASH_HOST).trim();
+  const httpWithPort = `http://${TARGET_API_HOST}${UNRAID_API_HTTP_PORT ? `:${UNRAID_API_HTTP_PORT}` : ''}/graphql`;
+  const httpsWithPort = `https://${TARGET_API_HOST}${UNRAID_API_HTTPS_PORT ? `:${UNRAID_API_HTTPS_PORT}` : ''}/graphql`;
   const GQL_CANDIDATES = Array.from(new Set([
-    `${location.protocol}//${DASH_HOST}/graphql`,
-    `http://${DASH_HOST}/graphql`,
-    `https://${DASH_HOST}/graphql`,
-  ]));
+    UNRAID_GRAPHQL_URL?.trim(),
+    `${location.protocol}//${TARGET_API_HOST}/graphql`,
+    httpWithPort,
+    httpsWithPort,
+    `http://${TARGET_API_HOST}/graphql`,
+    `https://${TARGET_API_HOST}/graphql`,
+  ].filter(Boolean)));
   let GQL = GQL_CANDIDATES[0];
   const KEY  = UNRAID_API_KEY;
   const MAX_HIST = 30;
