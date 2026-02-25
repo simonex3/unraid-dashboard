@@ -19,7 +19,7 @@ DEFAULT_SPEEDTEST_CRON_MINUTES = max(0, int(os.environ.get("SPEEDTEST_CRON_MINUT
 MAX_SPEEDTEST_CRON_MINUTES = 14 * 24 * 60
 SPEEDTEST_HISTORY_LIMIT = max(10, int(os.environ.get("SPEEDTEST_HISTORY_LIMIT", "500")))
 METRICS_HISTORY_LIMIT = max(500, int(os.environ.get("METRICS_HISTORY_LIMIT", "30000")))
-METRICS_MIN_SAMPLE_SECONDS = max(5, int(os.environ.get("METRICS_MIN_SAMPLE_SECONDS", "60")))
+METRICS_MIN_SAMPLE_SECONDS = max(5, int(os.environ.get("METRICS_MIN_SAMPLE_SECONDS", "15")))
 
 # Interfaces to prefer for network stats (in order)
 _NET_PREFER = ["bond0", "eth0", "eth1", "ens3", "ens0", "enp3s0", "enp0s3"]
