@@ -62,6 +62,29 @@ query { metrics { network { interfaces { name rxBytes txBytes } } } }
 ## Offene TODOs
 - Netzwerk-Query gegen API verifizieren (rxBytes/txBytes Feldnamen prüfen)
 - Speedtest: Server-seitige Historie (aktuell nur localStorage = browserseitig)
+- GitHub Remote noch nicht verbunden (gh CLI nicht installiert)
+
+## GitHub Workflow
+
+**Datei-Struktur:**
+- `index.html`        → Sanitized (Placeholder-Key) — in Git, öffentlich teilbar
+- `index.html.local`  → Echte Credentials — NIEMALS committen, in `.gitignore`
+
+**Zum GitHub pushen:**
+```bash
+bash publish.sh "Beschreibung der Änderung"
+```
+Das Skript ersetzt automatisch den echten API Key mit `YOUR_UNRAID_API_KEY` bevor es pusht.
+
+**Für lokale Entwicklung und Deployments immer `index.html.local` bearbeiten!**
+
+**GitHub Repo einrichten (einmalig, falls noch nicht gemacht):**
+```bash
+# 1. Repo auf github.com erstellen (privat)
+# 2. Remote verbinden:
+git remote add origin https://github.com/DEIN_USERNAME/unraid-dashboard.git
+git push -u origin master
+```
 
 ## Deploy-Workflow
 ```bash
