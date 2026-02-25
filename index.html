@@ -58,6 +58,11 @@
     @keyframes pglow { 0%,100%{filter:drop-shadow(0 0 8px rgba(249,115,22,.5))} 50%{filter:drop-shadow(0 0 20px rgba(249,115,22,.9))} }
     .logo h1 { font-family: var(--fh); font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
     .logo h1 span { color: var(--accent); }
+    .logo-meta { display: flex; flex-direction: column; gap: 1px; }
+    .logo-by {
+      font-size: 10px; color: var(--muted); letter-spacing: 1.1px; text-transform: uppercase;
+      line-height: 1;
+    }
     .hright { display: flex; align-items: center; gap: 14px; }
     .server-pill {
       font-size: 12px; color: var(--muted); background: var(--surface);
@@ -397,7 +402,10 @@
   <header>
     <div class="logo" id="logo-trigger" title="Diagnose: Ctrl+Shift+D">
       <div class="logo-icon">&#x2B21;</div>
-      <h1>UN<span>RAID</span> DASHBOARD</h1>
+      <div class="logo-meta">
+        <h1>UN<span>RAID</span> DASHBOARD</h1>
+        <div class="logo-by">by simonex3</div>
+      </div>
     </div>
     <div class="hright">
       <span class="server-pill" id="server-pill">HOST</span>

@@ -49,7 +49,20 @@ Open `index.html` in any text editor and replace the placeholder on **line ~615*
 const UNRAID_API_KEY = 'YOUR_UNRAID_API_KEY';  // ← paste your key here
 ```
 
-That's the only change needed. The server IP is detected automatically from the browser URL.
+In most setups, that's the only change needed.
+
+If your Unraid WebUI/API runs on non-default ports (for example `81` / `4443`), also set:
+
+```js
+const UNRAID_API_HOST = '';          // optional, e.g. '192.168.1.50'
+const UNRAID_API_HTTP_PORT = '81';   // your HTTP port
+const UNRAID_API_HTTPS_PORT = '4443';// your HTTPS port
+const UNRAID_GRAPHQL_URL = '';       // optional hard override, e.g. 'https://192.168.1.50:4443/graphql'
+```
+
+Notes:
+- Leave `UNRAID_API_HOST` empty to use the dashboard host automatically.
+- `UNRAID_GRAPHQL_URL` overrides host/port variables completely.
 
 > **Tip:** Use a simple text editor like Notepad (Windows), TextEdit (Mac) or nano (Linux). Avoid Word or other rich-text editors as they may corrupt the file.
 
