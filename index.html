@@ -353,7 +353,7 @@
       <h1>UN<span>RAID</span> DASHBOARD</h1>
     </div>
     <div class="hright">
-      <span class="server-pill">192.168.178.112</span>
+      <span class="server-pill" id="server-pill">HOST</span>
       <button class="refresh-btn" onclick="loadAll()">&#8635; REFRESH</button>
       <div class="conn-dot" id="conn-dot"></div>
     </div>
@@ -394,7 +394,7 @@
         </div>
       </div>
       <div class="spark-wrap">
-        <div class="spark-label">Verlauf (30 Messungen) <span id="cpu-spark-cur">—</span></div>
+        <div class="spark-label">Verlauf (14 Tage) <span id="cpu-spark-cur">—</span></div>
         <svg class="spark-svg" viewBox="0 0 300 50" preserveAspectRatio="none" height="50" id="cpu-spark-svg"></svg>
       </div>
     </div>
@@ -616,16 +616,27 @@
   // API Key: Unraid → Einstellungen → Management Access → API Key
   const UNRAID_API_KEY = 'YOUR_UNRAID_API_KEY';
   // ──────────────────────────────────────────────────────────────────
-  const GQL = `${location.protocol}//${location.hostname}/graphql`;
+  const DASH_HOST = location.hostname || 'localhost';
+  const DASH_PORT = location.port || '8888';
+  const API_BASE = `${location.protocol}//${DASH_HOST}:${DASH_PORT}`;
+  const GQL = `${location.protocol}//${DASH_HOST}/graphql`;
   const KEY  = UNRAID_API_KEY;
   const MAX_HIST = 30;
+  const CPU_HISTORY_KEY = 'unraid_cpu_history_v1';
+  const CPU_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+  const CPU_HISTORY_SAMPLE_MS = 60 * 1000;
 
   // ── history buffers ───────────────────────────────────────────────
-  const cpuHistory = [];
+  const cpuSparkHistory = [];
+  const cpuHistory = loadCPUHistory();
   const netRxHist  = [];
   const netTxHist  = [];
+  const stHistoryCache = [];
+  let stHistoryLoaded = false;
   let _prevNet = null;
   let _prevNetTime = null;
+
+  document.getElementById('server-pill').textContent = `HOST: ${DASH_HOST}`;
 
   async function gql(query) {
     const r = await fetch(GQL, {
@@ -677,6 +688,53 @@
     return d > 0 ? `${d}d ${h}h` : `${h}h ${m}m`;
   }
 
+  function loadCPUHistory() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CPU_HISTORY_KEY) || '[]');
+      const now = Date.now();
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((entry) =>
+          entry &&
+          Number.isFinite(entry.ts) &&
+          Number.isFinite(entry.pct) &&
+          entry.ts >= (now - CPU_HISTORY_RETENTION_MS)
+        )
+        .map((entry) => ({ ts: entry.ts, pct: Math.max(0, Math.min(100, Number(entry.pct))) }));
+    } catch {
+      return [];
+    }
+  }
+
+  function persistCPUHistory() {
+    localStorage.setItem(CPU_HISTORY_KEY, JSON.stringify(cpuHistory));
+  }
+
+  function recordCPUPoint(pct) {
+    const now = Date.now();
+    const last = cpuHistory[cpuHistory.length - 1];
+    if (!last || (now - last.ts) >= CPU_HISTORY_SAMPLE_MS) {
+      cpuHistory.push({ ts: now, pct });
+    } else {
+      last.pct = pct;
+    }
+    while (cpuHistory.length && cpuHistory[0].ts < (now - CPU_HISTORY_RETENTION_MS)) {
+      cpuHistory.shift();
+    }
+    persistCPUHistory();
+  }
+
+  function getCPUChartSeries(maxPoints = 300) {
+    const values = cpuHistory.map((entry) => entry.pct);
+    if (values.length <= maxPoints) return values;
+    const step = values.length / maxPoints;
+    const sampled = [];
+    for (let i = 0; i < maxPoints; i++) {
+      sampled.push(values[Math.floor(i * step)]);
+    }
+    return sampled;
+  }
+
   // ── sparkline drawing ────────────────────────────────────────────
   function drawSparkline(svgId, data, color, vbWidth=300, vbHeight=50) {
     const svg = document.getElementById(svgId);
@@ -726,11 +784,13 @@
       document.getElementById('cpu-desc').innerHTML =
         `${cpu.cpus?.length || '?'} Kerne<br>Auslastung: ${cpu.percentTotal.toFixed(1)}%`;
 
-      // history + sparkline
-      cpuHistory.push(pct);
-      if (cpuHistory.length > MAX_HIST) cpuHistory.shift();
-      if (cpuHistory.length >= 2) {
-        drawSparkline('cpu-spark-svg', cpuHistory, 'var(--accent)');
+      // live + persisted 14-day history
+      cpuSparkHistory.push(pct);
+      if (cpuSparkHistory.length > MAX_HIST) cpuSparkHistory.shift();
+      recordCPUPoint(pct);
+      const cpuSeries = getCPUChartSeries();
+      if (cpuSeries.length >= 2) {
+        drawSparkline('cpu-spark-svg', cpuSeries, 'var(--accent)');
       }
       document.getElementById('cpu-spark-cur').textContent = pct + '%';
       document.getElementById('cpu-spark-cur').style.color = pctColor(pct);
@@ -996,21 +1056,53 @@
     setTimeout(() => el.classList.remove('show'), 2800);
   }
 
-  // ── speedtest history (localStorage) ────────────────────────────
+  // ── speedtest history (backend API + fallback) ──────────────────
   const ST_KEY = 'unraid_speedtest_history';
 
-  function loadSTHistory() {
-    try { return JSON.parse(localStorage.getItem(ST_KEY) || '[]'); }
+  function normalizeSTHistory(history) {
+    if (!Array.isArray(history)) return [];
+    return history
+      .filter((h) => h && h.ts)
+      .map((h) => ({
+        ts: h.ts,
+        ping: h.ping != null ? Number(h.ping) : null,
+        download: h.download != null ? Number(h.download) : null,
+        upload: h.upload != null ? Number(h.upload) : null,
+      }));
+  }
+
+  function saveSTFallback(history) {
+    try {
+      localStorage.setItem(ST_KEY, JSON.stringify(history.slice(0, 500)));
+    } catch {}
+  }
+
+  function loadSTFallback() {
+    try { return normalizeSTHistory(JSON.parse(localStorage.getItem(ST_KEY) || '[]')); }
     catch { return []; }
   }
-  function saveSTResult(result) {
-    const history = loadSTHistory();
-    history.unshift({ ...result, ts: new Date().toISOString() });
-    if (history.length > 50) history.pop();
-    localStorage.setItem(ST_KEY, JSON.stringify(history));
+
+  async function refreshSTHistory() {
+    try {
+      const resp = await fetch(`${API_BASE}/api/speedtest/history`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const payload = await resp.json();
+      const history = normalizeSTHistory(payload.history || []);
+      stHistoryCache.splice(0, stHistoryCache.length, ...history);
+      saveSTFallback(history);
+      stHistoryLoaded = true;
+      return history;
+    } catch {
+      if (!stHistoryLoaded) {
+        const fallback = loadSTFallback();
+        stHistoryCache.splice(0, stHistoryCache.length, ...fallback);
+        stHistoryLoaded = true;
+      }
+      return stHistoryCache;
+    }
   }
   function exportSpeedtestCSV() {
-    const history = loadSTHistory();
+    const history = stHistoryCache;
     if (!history.length) { toast('Keine Daten zum Exportieren'); return; }
     const rows = [
       ['Nr', 'Datum', 'Uhrzeit', 'Download (Mbit/s)', 'Upload (Mbit/s)', 'Ping (ms)'],
@@ -1039,14 +1131,23 @@
     toast('CSV exportiert');
   }
 
-  function clearSTHistory() {
+  async function clearSTHistory() {
     if (!confirm('Speedtest-Historie wirklich löschen?')) return;
-    localStorage.removeItem(ST_KEY);
+    try {
+      const resp = await fetch(`${API_BASE}/api/speedtest/history`, { method: 'DELETE' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      stHistoryCache.splice(0, stHistoryCache.length);
+      localStorage.removeItem(ST_KEY);
+    } catch {
+      localStorage.removeItem(ST_KEY);
+      stHistoryCache.splice(0, stHistoryCache.length);
+    }
     renderSTModal();
     toast('Historie gelöscht');
   }
 
-  function openSTModal() {
+  async function openSTModal() {
+    await refreshSTHistory();
     renderSTModal();
     document.getElementById('st-modal').classList.add('open');
   }
@@ -1058,7 +1159,7 @@
   }
 
   function renderSTModal() {
-    const history = loadSTHistory();
+    const history = stHistoryCache;
     const tbody = document.getElementById('hist-tbody');
 
     if (history.length === 0) {
@@ -1117,8 +1218,7 @@
 
     const result = { ping: null, download: null, upload: null };
     try {
-      const port = location.port || '8888';
-      const SPEEDTEST_URL = `${location.protocol}//${location.hostname}:${port}/api/speedtest`;
+      const SPEEDTEST_URL = `${API_BASE}/api/speedtest`;
       const resp = await fetch(SPEEDTEST_URL, { cache: 'no-store' });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const r = await resp.json();
@@ -1128,7 +1228,7 @@
       set('st-ping', r.ping     != null ? r.ping     + ' ms'       : 'n/a');
       set('st-dl',   r.download != null ? r.download + ' Mbit/s'   : 'n/a');
       set('st-ul',   r.upload   != null ? r.upload   + ' Mbit/s'   : 'n/a');
-      saveSTResult(result);
+      await refreshSTHistory();
       toast('Speedtest abgeschlossen');
     } catch(e) {
       set('st-dl', 'Fehler'); set('st-ul', 'Fehler'); set('st-ping', '—');
@@ -1178,6 +1278,7 @@
     if (e.key === 'Escape') closeSTModal();
   });
 
+  refreshSTHistory();
   loadAll();
   setInterval(loadAll, 15000);
 </script>

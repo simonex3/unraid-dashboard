@@ -81,9 +81,11 @@ query { vars { name } info { os { uptime hostname } versions { core { unraid } }
 | 2026-02-25 | Netzwerk-Graph leer (kein GraphQL-Feld)      | `/api/network` Endpoint im Python-Backend, liest /proc/net/dev  |
 | 2026-02-25 | Netzwerk zeigte Container-IFs statt Host-IFs | Container auf `--network host` umgestellt                       |
 | 2026-02-25 | Speedtest Ping viel zu hoch (~300ms)         | ICMP-Ping via `subprocess ping 1.1.1.1`, Busybox-Regex fix      |
+| 2026-02-25 | Harte Host-IP im Dashboard                   | Host/API-Adresse wird dynamisch aus `location.hostname` ermittelt |
+| 2026-02-25 | CPU-Verlauf zu kurz                          | 14-Tage-Historie (1-Min-Sampling) in `localStorage` eingeführt   |
+| 2026-02-25 | Speedtest nur manuell/local                  | Server-Cron + persistente History API (`/api/speedtest/history`) |
 
 ## Offene TODOs
-- Speedtest-Historie: aktuell nur localStorage (browserseitig), keine Server-Persistenz
 - RAM: kein `MemAvailable`-Feld in der API — Bytes-Anzeige weicht vom Gauge-% ab
 
 ## GitHub Workflow
@@ -121,8 +123,8 @@ ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && 
 - **Kein Framework** — reines HTML/CSS/JS, eine einzige `index.html`
 - **Polling** alle 15 Sekunden via `setInterval(loadAll, 15000)`
 - **Netzwerk-Graph**: `/api/network` alle 15s pollen, Delta rxBytes/txBytes / Δt = Bytes/s
-- **CPU-Sparkline**: `cpuHistory[]` Array (max 30 Punkte), SVG Area-Chart
-- **Speedtest-Historie**: `localStorage` Key `unraid_speedtest_history`, max 50 Einträge (JSON)
+- **CPU-Sparkline**: 14-Tage-Historie in `localStorage` (`unraid_cpu_history_v1`, 1-Min-Sampling), fürs Rendering auf max. 300 Punkte gesampelt
+- **Speedtest-Historie**: serverseitig im Python-Backend persistiert (`/tmp/unraid_dashboard_state.json`), Modal lädt via `/api/speedtest/history`
 - **Fehlerbehandlung**: Jede GQL-Query hat `.catch()` — ein Fehler blockiert nicht die anderen
 - **Gauge-Circumference**: C = 226.19 (Kreis r=36, 2π×36 ≈ 226.19)
 - **Sparkline-Formel**: `y = height - (value / max) * (height - 4) - 2` (2px Padding)

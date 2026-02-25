@@ -5,14 +5,14 @@ A modern, single-page web dashboard for Unraid servers. Runs as a Docker contain
 ## Features
 
 - **System Overview** — hostname, Unraid version, uptime
-- **CPU** — live gauge, per-core usage, 30-point sparkline history
+- **CPU** — live gauge, per-core usage, and persisted 14-day history
 - **RAM** — real usage gauge (excluding buffer/cache), available memory display
 - **Network** — live RX/TX graphs updated every 15 seconds
 - **Array & Disks** — all drives including parities and cache pools
 - **Docker Containers** — status, image, sorted by running state
 - **VMs** — virtual machine list with state
 - **Shares** — all user shares with free space
-- **Speedtest** — on-demand test from the server itself (against Cloudflare), with history modal, trend charts and CSV export
+- **Speedtest** — on-demand test plus automatic cron runs on the server, with persisted history, trend charts and CSV export
 
 ## Screenshots
 
@@ -153,7 +153,9 @@ The dashboard polls the Unraid GraphQL API every 15 seconds. All queries use ind
 
 ## Speedtest History
 
-Results are stored in the browser's `localStorage` (up to 50 entries). Click **DETAILS** on the speedtest card to view:
+Results are persisted server-side via the Python backend and exposed via `/api/speedtest/history`.
+Default cron interval is every 240 minutes (configurable via `SPEEDTEST_CRON_MINUTES`, set `0` to disable).
+Click **DETAILS** on the speedtest card to view:
 - Average download / upload / ping
 - Trend sparklines
 - Full history table with CSV export
