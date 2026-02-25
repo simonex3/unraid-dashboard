@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Unraid Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpolygon points='32,4 56,18 56,46 32,60 8,46 8,18' fill='%23f97316'/%3E%3Ctext x='32' y='39' font-size='26' text-anchor='middle' fill='%230a0c10' font-family='Arial'%3EU%3C/text%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
@@ -364,13 +365,37 @@
     .tag-green { color: var(--green); }
     .tag-red   { color: var(--red); }
     .tag-yellow{ color: var(--yellow); }
+    .diag-panel {
+      position: fixed; left: 16px; bottom: 16px; z-index: 1200;
+      width: min(420px, calc(100vw - 32px));
+      background: rgba(16,20,28,.96); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px; box-shadow: 0 16px 40px rgba(0,0,0,.35);
+      display: none;
+    }
+    .diag-panel.open { display: block; }
+    .diag-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .diag-title { font-family: var(--fh); font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); }
+    .diag-close {
+      background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px;
+      font-family: var(--fm); font-size: 11px; cursor: pointer; padding: 4px 8px;
+    }
+    .diag-close:hover { border-color: var(--red); color: var(--red); }
+    .diag-row { font-size: 11px; margin-bottom: 6px; color: var(--muted); }
+    .diag-row b { color: var(--text); font-weight: 700; }
+    .diag-val { color: var(--text); word-break: break-all; }
+    .diag-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .diag-btn {
+      background: none; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 6px; font-family: var(--fm); font-size: 11px; cursor: pointer; padding: 6px 10px;
+    }
+    .diag-btn:hover { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
 <div id="app">
 
   <header>
-    <div class="logo">
+    <div class="logo" id="logo-trigger" title="Diagnose: Ctrl+Shift+D">
       <div class="logo-icon">&#x2B21;</div>
       <h1>UN<span>RAID</span> DASHBOARD</h1>
     </div>
@@ -572,6 +597,22 @@
   <div class="last-update" id="last-update">Lade Daten...</div>
 </div>
 
+<div class="diag-panel" id="diag-panel">
+  <div class="diag-head">
+    <div class="diag-title">API Diagnose</div>
+    <button class="diag-close" onclick="toggleDiagPanel(false)">X</button>
+  </div>
+  <div class="diag-row"><b>Status:</b> <span class="diag-val" id="diag-status">—</span></div>
+  <div class="diag-row"><b>Aktive URL:</b> <span class="diag-val" id="diag-url">—</span></div>
+  <div class="diag-row"><b>Letzter Check:</b> <span class="diag-val" id="diag-check">—</span></div>
+  <div class="diag-row"><b>Fehler:</b> <span class="diag-val" id="diag-error">—</span></div>
+  <div class="diag-row"><b>Kandidaten:</b> <span class="diag-val" id="diag-candidates">—</span></div>
+  <div class="diag-actions">
+    <button class="diag-btn" onclick="runManualApiCheck()">API Check jetzt</button>
+    <button class="diag-btn" onclick="loadAll()">Neu laden</button>
+  </div>
+</div>
+
 <!-- CPU DETAIL MODAL -->
 <div class="modal-overlay" id="cpu-modal" onclick="closeCPUModalBg(event)">
   <div class="modal">
@@ -717,7 +758,12 @@
   const DASH_HOST = location.hostname || 'localhost';
   const DASH_PORT = location.port || '8888';
   const API_BASE = `${location.protocol}//${DASH_HOST}:${DASH_PORT}`;
-  const GQL = `${location.protocol}//${DASH_HOST}/graphql`;
+  const GQL_CANDIDATES = Array.from(new Set([
+    `${location.protocol}//${DASH_HOST}/graphql`,
+    `http://${DASH_HOST}/graphql`,
+    `https://${DASH_HOST}/graphql`,
+  ]));
+  let GQL = GQL_CANDIDATES[0];
   const KEY  = UNRAID_API_KEY;
   const MAX_HIST = 30;
   const CPU_HISTORY_KEY = 'unraid_cpu_history_v1';
@@ -737,8 +783,140 @@
   let stHistoryLoaded = false;
   let _prevNet = null;
   let _prevNetTime = null;
+  let _diagTapCount = 0;
+  let _diagTapTimer = null;
+  const apiDiag = {
+    status: 'INIT',
+    activeUrl: GQL,
+    lastCheck: null,
+    error: '',
+    candidates: GQL_CANDIDATES.join(' | ')
+  };
 
   document.getElementById('server-pill').textContent = `HOST: ${DASH_HOST}`;
+  document.getElementById('diag-candidates').textContent = apiDiag.candidates;
+
+  function updateDiagPanel() {
+    document.getElementById('diag-status').textContent = apiDiag.status || '—';
+    document.getElementById('diag-url').textContent = apiDiag.activeUrl || '—';
+    document.getElementById('diag-check').textContent = apiDiag.lastCheck || '—';
+    document.getElementById('diag-error').textContent = apiDiag.error || '—';
+  }
+
+  function toggleDiagPanel(force) {
+    const panel = document.getElementById('diag-panel');
+    const open = typeof force === 'boolean' ? force : !panel.classList.contains('open');
+    panel.classList.toggle('open', open);
+    if (open) updateDiagPanel();
+  }
+
+  async function runManualApiCheck() {
+    const result = await checkGraphQLAccess();
+    if (result.ok) {
+      toast('API Check erfolgreich');
+    } else {
+      showErr(result.message);
+      toast('API Check fehlgeschlagen');
+    }
+    updateDiagPanel();
+  }
+
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function probeGraphQL(url) {
+    try {
+      const resp = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': KEY },
+        body: JSON.stringify({ query: 'query { vars { name } }' }),
+      });
+      const raw = await resp.text();
+      let json = null;
+      try { json = raw ? JSON.parse(raw) : null; } catch {}
+
+      if (!resp.ok) {
+        return {
+          ok: false,
+          url,
+          type: 'http',
+          status: resp.status,
+          message: json?.errors?.[0]?.message || raw?.slice(0, 140) || `HTTP ${resp.status}`,
+        };
+      }
+      if (json?.errors?.length) {
+        return {
+          ok: false,
+          url,
+          type: 'graphql',
+          status: resp.status,
+          message: json.errors[0].message || 'GraphQL-Fehler',
+        };
+      }
+      return { ok: true, url, type: 'ok', status: resp.status };
+    } catch (e) {
+      return { ok: false, url, type: 'network', message: e?.name === 'AbortError' ? 'Timeout' : (e?.message || 'Fetch fehlgeschlagen') };
+    }
+  }
+
+  function explainGraphQLError(result) {
+    const base = `Unraid API nicht erreichbar (${result.url})`;
+    const msg = (result.message || '').toLowerCase();
+    if (result.status === 401 || result.status === 403 || msg.includes('api key') || msg.includes('unauthor')) {
+      return `${base}: API-Key ungültig oder ohne Zugriff auf GraphQL (401/403).`;
+    }
+    if (result.status === 404) {
+      return `${base}: /graphql nicht gefunden. Prüfe Unraid API/Aktivierung sowie WebUI-Port/HTTPS.`;
+    }
+    if (result.type === 'network') {
+      return `${base}: Verbindungsfehler oder falsches HTTP/HTTPS-Schema.`;
+    }
+    if (result.type === 'graphql') {
+      return `${base}: ${result.message}`;
+    }
+    return `${base}: ${result.message || `HTTP ${result.status || 'Fehler'}`}`;
+  }
+
+  async function checkGraphQLAccess() {
+    const tries = [GQL, ...GQL_CANDIDATES.filter((u) => u !== GQL)];
+    const failures = [];
+    for (const url of tries) {
+      const probe = await probeGraphQL(url);
+      if (probe.ok) {
+        GQL = url;
+        apiDiag.status = 'OK';
+        apiDiag.activeUrl = GQL;
+        apiDiag.lastCheck = new Date().toLocaleString('de-DE');
+        apiDiag.error = '';
+        updateDiagPanel();
+        return { ok: true, url };
+      }
+      if (probe.status === 401 || probe.status === 403 || probe.type === 'graphql') {
+        GQL = url;
+        apiDiag.status = `ERROR (${probe.status || probe.type})`;
+        apiDiag.activeUrl = GQL;
+        apiDiag.lastCheck = new Date().toLocaleString('de-DE');
+        apiDiag.error = explainGraphQLError(probe);
+        updateDiagPanel();
+        return { ok: false, message: apiDiag.error, detail: probe };
+      }
+      failures.push(probe);
+    }
+    const first = failures[0] || { url: GQL, message: 'Unbekannter Fehler' };
+    apiDiag.status = `ERROR (${first.status || first.type || 'unknown'})`;
+    apiDiag.activeUrl = first.url || GQL;
+    apiDiag.lastCheck = new Date().toLocaleString('de-DE');
+    apiDiag.error = explainGraphQLError(first);
+    updateDiagPanel();
+    return { ok: false, message: apiDiag.error, detail: first };
+  }
 
   async function gql(query) {
     const r = await fetch(GQL, {
@@ -1329,6 +1507,9 @@
     const el = document.getElementById('error-banner');
     el.textContent = 'Fehler: ' + msg;
     el.style.display = 'block';
+    apiDiag.error = String(msg || '');
+    if (!apiDiag.lastCheck) apiDiag.lastCheck = new Date().toLocaleString('de-DE');
+    updateDiagPanel();
   }
   function toast(msg) {
     const el = document.getElementById('toast');
@@ -1528,6 +1709,14 @@
   async function loadAll() {
     document.getElementById('error-banner').style.display = 'none';
     try {
+      const apiState = await checkGraphQLAccess();
+      if (!apiState.ok) {
+        setConn(false);
+        showErr(apiState.message);
+        loadNetwork();
+        return;
+      }
+
       const [metrics, sysinfo, array, docker, vms, shares] = await Promise.all([
         gql('query { metrics { cpu { percentTotal cpus { percentTotal } } memory { total used free buffcache percentTotal swapTotal swapUsed swapFree percentSwapTotal } } }').catch(e=>(console.warn('metrics',e),null)),
         gql('query { vars { name } info { os { uptime hostname } versions { core { unraid } } } }').catch(e=>(console.warn('sysinfo',e),null)),
@@ -1559,10 +1748,26 @@
 
   // Keyboard: Escape closes modal
   document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+      e.preventDefault();
+      toggleDiagPanel();
+      return;
+    }
     if (e.key === 'Escape') {
       closeSTModal();
       closeCPUModal();
       closeNetModal();
+      toggleDiagPanel(false);
+    }
+  });
+
+  document.getElementById('logo-trigger').addEventListener('click', () => {
+    _diagTapCount += 1;
+    if (_diagTapTimer) clearTimeout(_diagTapTimer);
+    _diagTapTimer = setTimeout(() => { _diagTapCount = 0; }, 1400);
+    if (_diagTapCount >= 5) {
+      _diagTapCount = 0;
+      toggleDiagPanel();
     }
   });
 

@@ -84,6 +84,8 @@ query { vars { name } info { os { uptime hostname } versions { core { unraid } }
 | 2026-02-25 | Harte Host-IP im Dashboard                   | Host/API-Adresse wird dynamisch aus `location.hostname` ermittelt |
 | 2026-02-25 | CPU-Verlauf zu kurz                          | 14-Tage-Historie (1-Min-Sampling) in `localStorage` eingeführt   |
 | 2026-02-25 | Speedtest nur manuell/local                  | Server-Cron + persistente History API (`/api/speedtest/history`) |
+| 2026-02-25 | CPU/Netzwerk ohne Detailansicht              | Klickbare Detail-Modals mit Zeitraumfilter (1h/6h/24h/7d/14d)    |
+| 2026-02-25 | Speedtest-Cron nicht im UI einstellbar       | Cron-Input + Save-Button, neue Config-API (`/api/speedtest/config`) |
 
 ## Offene TODOs
 - RAM: kein `MemAvailable`-Feld in der API — Bytes-Anzeige weicht vom Gauge-% ab
@@ -124,10 +126,21 @@ ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && 
 - **Polling** alle 15 Sekunden via `setInterval(loadAll, 15000)`
 - **Netzwerk-Graph**: `/api/network` alle 15s pollen, Delta rxBytes/txBytes / Δt = Bytes/s
 - **CPU-Sparkline**: 14-Tage-Historie in `localStorage` (`unraid_cpu_history_v1`, 1-Min-Sampling), fürs Rendering auf max. 300 Punkte gesampelt
+- **CPU-Detailmodal**: Zeitraumfilter (1h/6h/24h/7d/14d), Trendchart + Tabelle
+- **Netzwerk-Detailmodal**: 14-Tage-Historie in `localStorage` (`unraid_net_history_v1`, 1-Min-Sampling), Zeitraumfilter + Trends
 - **Speedtest-Historie**: serverseitig im Python-Backend persistiert (`/tmp/unraid_dashboard_state.json`), Modal lädt via `/api/speedtest/history`
+- **Speedtest-Cron-Konfiguration**: Backend-konfigurierbar via `/api/speedtest/config` (GET/POST), UI setzt Minutenintervall
 - **Fehlerbehandlung**: Jede GQL-Query hat `.catch()` — ein Fehler blockiert nicht die anderen
 - **Gauge-Circumference**: C = 226.19 (Kreis r=36, 2π×36 ≈ 226.19)
 - **Sparkline-Formel**: `y = height - (value / max) * (height - 4) - 2` (2px Padding)
+
+## Backend API (Python)
+- `GET /api/network` → Host-Netzwerkbytes (`rxBytes`, `txBytes`, `interface`)
+- `GET /api/speedtest` → Führt sofortigen Speedtest aus
+- `GET /api/speedtest/history` → Persistente Speedtest-Historie + aktuelles Cron-Intervall
+- `DELETE /api/speedtest/history` → Löscht Speedtest-Historie
+- `GET /api/speedtest/config` → Liefert Cron-Konfiguration (`cronMinutes`)
+- `POST /api/speedtest/config?cronMinutes=N` → Setzt Cron-Intervall (0 = deaktiviert)
 
 ## Tech Stack
 - Reines HTML/CSS/JS (kein Framework)
@@ -156,7 +169,7 @@ ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && 
 - `index.html.local`     → Wie index.html, aber mit echten Credentials (nur lokal)
 - `Dockerfile`           → Docker Build (nginx:alpine + python3)
 - `nginx.conf`           → nginx Port 8888, proxied /api/speedtest + /api/network → 8889
-- `speedtest_server.py`  → Python HTTP Server Port 8889: Speedtest + /proc/net/dev
+- `speedtest_server.py`  → Python HTTP Server Port 8889: Speedtest, Cron, History + Config API, `/proc/net/dev`
 - `start.sh`             → Startet Python-Backend + nginx
 - `publish.sh`           → Sanitized index.html + CONTEXT.md und pusht zu GitHub
 - `CONTEXT.md`           → Diese Datei
