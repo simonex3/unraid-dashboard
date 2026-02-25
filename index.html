@@ -483,7 +483,7 @@
 
     <!-- NETWORK GRAPH -->
     <div class="card c12" style="animation-delay:.18s">
-      <div class="card-title">Netzwerk Auslastung <span id="net-iface" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px"></span><button class="title-btn" onclick="openNetModal()">DETAILS</button></div>
+      <div class="card-title">Netzwerk Auslastung <span id="net-iface" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px"></span><select class="range-select" id="net-unit-mode" onchange="applyNetUnitMode()" style="margin-left:auto;height:24px;padding:2px 6px;font-size:10px"><option value="KBps">KB/s</option><option value="Kbitps">Kbit/s</option><option value="MBps" selected>MB/s</option><option value="Mbitps">Mbit/s</option></select><button class="title-btn" onclick="openNetModal()">DETAILS</button></div>
       <div class="net-row">
         <div class="net-side">
           <div class="net-head">
@@ -772,6 +772,7 @@
   const NET_HISTORY_KEY = 'unraid_net_history_v1';
   const NET_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
   const NET_HISTORY_SAMPLE_MS = 60 * 1000;
+  const NET_UNIT_KEY = 'unraid_net_unit_mode_v1';
 
   // ── history buffers ───────────────────────────────────────────────
   const cpuSparkHistory = [];
@@ -783,6 +784,8 @@
   let stHistoryLoaded = false;
   let _prevNet = null;
   let _prevNetTime = null;
+  let netLastRate = { rx: null, tx: null };
+  let netUnitMode = (localStorage.getItem(NET_UNIT_KEY) || 'MBps');
   let _diagTapCount = 0;
   let _diagTapTimer = null;
   const apiDiag = {
@@ -794,6 +797,7 @@
   };
 
   document.getElementById('server-pill').textContent = `HOST: ${DASH_HOST}`;
+  document.getElementById('net-unit-mode').value = netUnitMode;
   document.getElementById('diag-candidates').textContent = apiDiag.candidates;
 
   function updateDiagPanel() {
@@ -947,11 +951,36 @@
     return (b/1e3).toFixed(0)+' KB';
   }
   function fmtRate(bytesPerSec) {
-    if (bytesPerSec == null) return { val: '—', unit: 'MB/s' };
-    if (bytesPerSec >= 1e9) return { val: (bytesPerSec/1e9).toFixed(2), unit: 'GB/s' };
-    if (bytesPerSec >= 1e6) return { val: (bytesPerSec/1e6).toFixed(1), unit: 'MB/s' };
-    if (bytesPerSec >= 1e3) return { val: (bytesPerSec/1e3).toFixed(0), unit: 'KB/s' };
-    return { val: bytesPerSec.toFixed(0), unit: 'B/s' };
+    const mode = netUnitMode;
+    const defaultUnit = mode === 'KBps' ? 'KB/s' : mode === 'Kbitps' ? 'Kbit/s' : mode === 'Mbitps' ? 'Mbit/s' : 'MB/s';
+    if (bytesPerSec == null) return { val: '—', unit: defaultUnit };
+
+    let value = bytesPerSec / 1e6;
+    let unit = 'MB/s';
+    if (mode === 'KBps') {
+      value = bytesPerSec / 1e3;
+      unit = 'KB/s';
+    } else if (mode === 'Kbitps') {
+      value = (bytesPerSec * 8) / 1e3;
+      unit = 'Kbit/s';
+    } else if (mode === 'Mbitps') {
+      value = (bytesPerSec * 8) / 1e6;
+      unit = 'Mbit/s';
+    }
+    const dec = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return { val: value.toFixed(dec), unit };
+  }
+
+  function applyNetUnitMode() {
+    netUnitMode = document.getElementById('net-unit-mode').value || 'MBps';
+    localStorage.setItem(NET_UNIT_KEY, netUnitMode);
+    const rx = fmtRate(netLastRate.rx);
+    const tx = fmtRate(netLastRate.tx);
+    document.getElementById('net-rx-val').textContent  = rx.val;
+    document.getElementById('net-rx-unit').textContent = rx.unit;
+    document.getElementById('net-tx-val').textContent  = tx.val;
+    document.getElementById('net-tx-unit').textContent = tx.unit;
+    if (document.getElementById('net-modal').classList.contains('open')) renderNetModal();
   }
   // Unraid disk sizes and shares are in KB
   function fmtKB(kb, dec=1) {
@@ -1344,6 +1373,7 @@
     if (elapsed > 0) {
       const rxRate = Math.max(0, (totalRx - _prevNet.rx) / elapsed);
       const txRate = Math.max(0, (totalTx - _prevNet.tx) / elapsed);
+      netLastRate = { rx: rxRate, tx: txRate };
       recordNetPoint(rxRate, txRate);
 
       netRxHist.push(rxRate);
@@ -1773,6 +1803,7 @@
 
   refreshSTHistory();
   loadSpeedtestConfig();
+  applyNetUnitMode();
   loadAll();
   setInterval(loadAll, 15000);
 </script>
