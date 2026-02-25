@@ -456,7 +456,7 @@
 
     <!-- RAM GAUGE -->
     <div class="card c4" style="animation-delay:.12s">
-      <div class="card-title">Arbeitsspeicher</div>
+      <div class="card-title">Arbeitsspeicher <button class="title-btn" onclick="openRAMModal()">DETAILS</button></div>
       <div class="gauge-row">
         <div class="gauge">
           <svg viewBox="0 0 86 86" width="86" height="86">
@@ -653,6 +653,47 @@
         <tbody id="cpu-detail-tbody"><tr><td colspan="3" class="hist-empty">Keine CPU-Daten.</td></tr></tbody>
       </table>
     </div>
+    <div style="display:flex;justify-content:flex-end;align-items:center;margin-top:12px">
+      <button class="hist-export-btn" onclick="exportCPUCSV()">&#11015; CSV EXPORT</button>
+    </div>
+  </div>
+</div>
+
+<!-- RAM DETAIL MODAL -->
+<div class="modal-overlay" id="ram-modal" onclick="closeRAMModalBg(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">RAM <span>Verlauf</span></div>
+      <button class="modal-close" onclick="closeRAMModal()">&#10005;</button>
+    </div>
+    <div class="range-row">
+      <label for="ram-range">Zeitraum</label>
+      <select class="range-select" id="ram-range" onchange="renderRAMModal()">
+        <option value="1h">1 Stunde</option>
+        <option value="6h">6 Stunden</option>
+        <option value="24h" selected>24 Stunden</option>
+        <option value="7d">7 Tage</option>
+        <option value="14d">14 Tage</option>
+      </select>
+    </div>
+    <div class="hist-summary">
+      <div class="hist-stat"><div class="hist-stat-val" id="ram-avg">—</div><div class="hist-stat-lbl">Ø RAM</div></div>
+      <div class="hist-stat"><div class="hist-stat-val" id="ram-max">—</div><div class="hist-stat-lbl">Max RAM</div></div>
+      <div class="hist-stat"><div class="hist-stat-val" id="ram-cur">—</div><div class="hist-stat-lbl">Aktuell</div></div>
+    </div>
+    <div class="hist-spark-item" style="margin-bottom:18px">
+      <div class="hist-spark-label">RAM Trend</div>
+      <svg width="100%" viewBox="0 0 400 90" preserveAspectRatio="none" height="90" id="ram-detail-svg"></svg>
+    </div>
+    <div class="hist-table-wrap">
+      <table class="hist-table">
+        <thead><tr><th>#</th><th>Datum / Zeit</th><th>RAM</th></tr></thead>
+        <tbody id="ram-detail-tbody"><tr><td colspan="3" class="hist-empty">Keine RAM-Daten.</td></tr></tbody>
+      </table>
+    </div>
+    <div style="display:flex;justify-content:flex-end;align-items:center;margin-top:12px">
+      <button class="hist-export-btn" onclick="exportRAMCSV()">&#11015; CSV EXPORT</button>
+    </div>
   </div>
 </div>
 
@@ -688,6 +729,9 @@
         <thead><tr><th>#</th><th>Datum / Zeit</th><th>Download</th><th>Upload</th></tr></thead>
         <tbody id="net-detail-tbody"><tr><td colspan="4" class="hist-empty">Keine Netzwerk-Daten.</td></tr></tbody>
       </table>
+    </div>
+    <div style="display:flex;justify-content:flex-end;align-items:center;margin-top:12px">
+      <button class="hist-export-btn" onclick="exportNetCSV()">&#11015; CSV EXPORT</button>
     </div>
   </div>
 </div>
@@ -785,6 +829,7 @@
   const KEY  = UNRAID_API_KEY;
   const MAX_HIST = 30;
   const CPU_HISTORY_KEY = 'unraid_cpu_history_v1';
+  const RAM_HISTORY_KEY = 'unraid_ram_history_v1';
   const CPU_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
   const CPU_HISTORY_SAMPLE_MS = 60 * 1000;
   const NET_HISTORY_KEY = 'unraid_net_history_v1';
@@ -794,8 +839,9 @@
 
   // ── history buffers ───────────────────────────────────────────────
   const cpuSparkHistory = [];
-  const cpuHistory = loadCPUHistory();
-  const netHistory = loadNetHistory();
+  let cpuHistory = loadCPUHistory();
+  let ramHistory = loadRAMHistory();
+  let netHistory = loadNetHistory();
   const netRxHist  = [];
   const netTxHist  = [];
   const stHistoryCache = [];
@@ -806,6 +852,8 @@
   let netUnitMode = (localStorage.getItem(NET_UNIT_KEY) || 'MBps');
   let _diagTapCount = 0;
   let _diagTapTimer = null;
+  let latestMetricsSnapshot = { cpuPct: null, ramPct: null, netRxBps: null, netTxBps: null };
+  let lastSnapshotPushMs = 0;
   const apiDiag = {
     status: 'INIT',
     activeUrl: GQL,
@@ -1062,6 +1110,89 @@
     return sampled;
   }
 
+  function loadRAMHistory() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(RAM_HISTORY_KEY) || '[]');
+      const now = Date.now();
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((entry) =>
+          entry &&
+          Number.isFinite(entry.ts) &&
+          Number.isFinite(entry.pct) &&
+          entry.ts >= (now - CPU_HISTORY_RETENTION_MS)
+        )
+        .map((entry) => ({ ts: entry.ts, pct: Math.max(0, Math.min(100, Number(entry.pct))) }));
+    } catch {
+      return [];
+    }
+  }
+
+  function persistRAMHistory() {
+    localStorage.setItem(RAM_HISTORY_KEY, JSON.stringify(ramHistory));
+  }
+
+  function recordRAMPoint(pct) {
+    const now = Date.now();
+    const last = ramHistory[ramHistory.length - 1];
+    if (!last || (now - last.ts) >= CPU_HISTORY_SAMPLE_MS) {
+      ramHistory.push({ ts: now, pct });
+    } else {
+      last.pct = pct;
+    }
+    while (ramHistory.length && ramHistory[0].ts < (now - CPU_HISTORY_RETENTION_MS)) {
+      ramHistory.shift();
+    }
+    persistRAMHistory();
+  }
+
+  async function refreshMetricsHistory() {
+    try {
+      const resp = await fetch(`${API_BASE}/api/metrics/history`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const payload = await resp.json();
+      const hist = payload?.history || {};
+
+      const mapPct = (arr) => (Array.isArray(arr) ? arr : [])
+        .map((x) => ({ ts: new Date(x.ts).getTime(), pct: Number(x.pct) }))
+        .filter((x) => Number.isFinite(x.ts) && Number.isFinite(x.pct));
+      const mapNet = (arr) => (Array.isArray(arr) ? arr : [])
+        .map((x) => ({ ts: new Date(x.ts).getTime(), rx: Number(x.rx), tx: Number(x.tx) }))
+        .filter((x) => Number.isFinite(x.ts) && Number.isFinite(x.rx) && Number.isFinite(x.tx));
+
+      const cpu = mapPct(hist.cpu);
+      const ram = mapPct(hist.ram);
+      const net = mapNet(hist.network);
+
+      if (cpu.length) {
+        cpuHistory = cpu;
+        localStorage.setItem(CPU_HISTORY_KEY, JSON.stringify(cpuHistory));
+      }
+      if (ram.length) {
+        ramHistory = ram;
+        localStorage.setItem(RAM_HISTORY_KEY, JSON.stringify(ramHistory));
+      }
+      if (net.length) {
+        netHistory = net;
+        localStorage.setItem(NET_HISTORY_KEY, JSON.stringify(netHistory));
+      }
+    } catch {}
+  }
+
+  async function pushMetricsSnapshot(force = false) {
+    const now = Date.now();
+    if (!force && (now - lastSnapshotPushMs) < 10000) return;
+    lastSnapshotPushMs = now;
+    try {
+      const q = new URLSearchParams();
+      if (latestMetricsSnapshot.cpuPct != null) q.set('cpuPct', String(latestMetricsSnapshot.cpuPct));
+      if (latestMetricsSnapshot.ramPct != null) q.set('ramPct', String(latestMetricsSnapshot.ramPct));
+      if (latestMetricsSnapshot.netRxBps != null) q.set('netRxBps', String(latestMetricsSnapshot.netRxBps));
+      if (latestMetricsSnapshot.netTxBps != null) q.set('netTxBps', String(latestMetricsSnapshot.netTxBps));
+      await fetch(`${API_BASE}/api/metrics/snapshot?${q.toString()}`, { method: 'POST' });
+    } catch {}
+  }
+
   function loadNetHistory() {
     try {
       const parsed = JSON.parse(localStorage.getItem(NET_HISTORY_KEY) || '[]');
@@ -1164,6 +1295,47 @@
       const dt = new Date(h.ts);
       const dateStr = dt.toLocaleDateString('de-DE') + ' ' + dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       return `<tr><td style="color:var(--muted)">${i + 1}</td><td style="color:var(--muted);font-size:11px">${dateStr}</td><td class="hist-ping">${h.pct.toFixed(0)}%</td></tr>`;
+    }).join('');
+  }
+
+  function openRAMModal() {
+    renderRAMModal();
+    document.getElementById('ram-modal').classList.add('open');
+  }
+  function closeRAMModal() {
+    document.getElementById('ram-modal').classList.remove('open');
+  }
+  function closeRAMModalBg(e) {
+    if (e.target === document.getElementById('ram-modal')) closeRAMModal();
+  }
+
+  function renderRAMModal() {
+    const range = document.getElementById('ram-range').value;
+    const data = filterByRange(ramHistory, range);
+    const tbody = document.getElementById('ram-detail-tbody');
+    if (!data.length) {
+      document.getElementById('ram-avg').textContent = '—';
+      document.getElementById('ram-max').textContent = '—';
+      document.getElementById('ram-cur').textContent = '—';
+      document.getElementById('ram-detail-svg').innerHTML = '';
+      tbody.innerHTML = '<tr><td colspan="3" class="hist-empty">Keine RAM-Daten im Zeitraum.</td></tr>';
+      return;
+    }
+    const values = data.map((d) => d.pct);
+    const current = values[values.length - 1];
+    const maximum = Math.max(...values);
+    const average = avg(values);
+    document.getElementById('ram-avg').textContent = `${average.toFixed(1)}%`;
+    document.getElementById('ram-max').textContent = `${maximum.toFixed(0)}%`;
+    document.getElementById('ram-cur').textContent = `${current.toFixed(0)}%`;
+    const series = toLimitedSeries(values, 400);
+    if (series.length >= 2) drawSparkline('ram-detail-svg', series, '#38bdf8', 400, 90);
+
+    const rows = [...data].reverse().slice(0, 120);
+    tbody.innerHTML = rows.map((h, i) => {
+      const dt = new Date(h.ts);
+      const dateStr = dt.toLocaleDateString('de-DE') + ' ' + dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      return `<tr><td style="color:var(--muted)">${i + 1}</td><td style="color:var(--muted);font-size:11px">${dateStr}</td><td class="hist-ul">${h.pct.toFixed(0)}%</td></tr>`;
     }).join('');
   }
 
@@ -1295,6 +1467,8 @@
       cpuSparkHistory.push(pct);
       if (cpuSparkHistory.length > MAX_HIST) cpuSparkHistory.shift();
       recordCPUPoint(pct);
+      latestMetricsSnapshot.cpuPct = pct;
+      pushMetricsSnapshot();
       const cpuSeries = getCPUChartSeries();
       if (cpuSeries.length >= 2) {
         drawSparkline('cpu-spark-svg', cpuSeries, 'var(--accent)');
@@ -1334,6 +1508,10 @@
 
       document.getElementById('c-ram').textContent = usedPct + '%';
       document.getElementById('c-ram').style.color = pctColor(usedPct);
+      recordRAMPoint(usedPct);
+      latestMetricsSnapshot.ramPct = usedPct;
+      pushMetricsSnapshot();
+      if (document.getElementById('ram-modal').classList.contains('open')) renderRAMModal();
 
       // swap
       if (memory.swapTotal > 0) {
@@ -1392,6 +1570,9 @@
       const rxRate = Math.max(0, (totalRx - _prevNet.rx) / elapsed);
       const txRate = Math.max(0, (totalTx - _prevNet.tx) / elapsed);
       netLastRate = { rx: rxRate, tx: txRate };
+      latestMetricsSnapshot.netRxBps = rxRate;
+      latestMetricsSnapshot.netTxBps = txRate;
+      pushMetricsSnapshot();
       recordNetPoint(rxRate, txRate);
 
       netRxHist.push(rxRate);
@@ -1614,6 +1795,65 @@
       return stHistoryCache;
     }
   }
+
+  function downloadCSV(filename, rows) {
+    const csv  = rows.map(r => r.map(v => `"${String(v ?? '')}"`).join(';')).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCPUCSV() {
+    const range = document.getElementById('cpu-range').value;
+    const rowsData = filterByRange(cpuHistory, range);
+    if (!rowsData.length) { toast('Keine CPU-Daten zum Exportieren'); return; }
+    const rows = [
+      ['Nr', 'Datum', 'Uhrzeit', 'CPU (%)'],
+      ...rowsData.map((h, i) => {
+        const dt = new Date(h.ts);
+        return [i + 1, dt.toLocaleDateString('de-DE'), dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }), h.pct.toFixed(1)];
+      })
+    ];
+    downloadCSV(`cpu-history-${range}-${new Date().toISOString().slice(0,10)}.csv`, rows);
+    toast('CPU CSV exportiert');
+  }
+
+  function exportRAMCSV() {
+    const range = document.getElementById('ram-range').value;
+    const rowsData = filterByRange(ramHistory, range);
+    if (!rowsData.length) { toast('Keine RAM-Daten zum Exportieren'); return; }
+    const rows = [
+      ['Nr', 'Datum', 'Uhrzeit', 'RAM (%)'],
+      ...rowsData.map((h, i) => {
+        const dt = new Date(h.ts);
+        return [i + 1, dt.toLocaleDateString('de-DE'), dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }), h.pct.toFixed(1)];
+      })
+    ];
+    downloadCSV(`ram-history-${range}-${new Date().toISOString().slice(0,10)}.csv`, rows);
+    toast('RAM CSV exportiert');
+  }
+
+  function exportNetCSV() {
+    const range = document.getElementById('net-range').value;
+    const rowsData = filterByRange(netHistory, range);
+    if (!rowsData.length) { toast('Keine Netzwerk-Daten zum Exportieren'); return; }
+    const rows = [
+      ['Nr', 'Datum', 'Uhrzeit', 'Download (B/s)', 'Upload (B/s)'],
+      ...rowsData.map((h, i) => {
+        const dt = new Date(h.ts);
+        return [i + 1, dt.toLocaleDateString('de-DE'), dt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }), h.rx.toFixed(2), h.tx.toFixed(2)];
+      })
+    ];
+    downloadCSV(`network-history-${range}-${new Date().toISOString().slice(0,10)}.csv`, rows);
+    toast('Netzwerk CSV exportiert');
+  }
+
   function exportSpeedtestCSV() {
     const history = stHistoryCache;
     if (!history.length) { toast('Keine Daten zum Exportieren'); return; }
@@ -1631,16 +1871,7 @@
         ];
       })
     ];
-    const csv  = rows.map(r => r.map(v => `"${v}"`).join(';')).join('\r\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `speedtest-${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadCSV(`speedtest-${new Date().toISOString().slice(0,10)}.csv`, rows);
     toast('CSV exportiert');
   }
 
@@ -1757,6 +1988,7 @@
   async function loadAll() {
     document.getElementById('error-banner').style.display = 'none';
     try {
+      await refreshMetricsHistory();
       const apiState = await checkGraphQLAccess();
       if (!apiState.ok) {
         setConn(false);
@@ -1804,6 +2036,7 @@
     if (e.key === 'Escape') {
       closeSTModal();
       closeCPUModal();
+      closeRAMModal();
       closeNetModal();
       toggleDiagPanel(false);
     }

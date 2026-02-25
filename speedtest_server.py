@@ -18,6 +18,8 @@ STATE_FILE = os.environ.get("DASHBOARD_STATE_FILE", "/tmp/unraid_dashboard_state
 DEFAULT_SPEEDTEST_CRON_MINUTES = max(0, int(os.environ.get("SPEEDTEST_CRON_MINUTES", "240")))
 MAX_SPEEDTEST_CRON_MINUTES = 14 * 24 * 60
 SPEEDTEST_HISTORY_LIMIT = max(10, int(os.environ.get("SPEEDTEST_HISTORY_LIMIT", "500")))
+METRICS_HISTORY_LIMIT = max(500, int(os.environ.get("METRICS_HISTORY_LIMIT", "30000")))
+METRICS_MIN_SAMPLE_SECONDS = max(5, int(os.environ.get("METRICS_MIN_SAMPLE_SECONDS", "60")))
 
 # Interfaces to prefer for network stats (in order)
 _NET_PREFER = ["bond0", "eth0", "eth1", "ens3", "ens0", "enp3s0", "enp0s3"]
@@ -27,7 +29,11 @@ _NET_IGNORE_PFX = ("veth", "br-", "vnet", "tun", "tap")
 
 _state_lock = threading.Lock()
 _speedtest_lock = threading.Lock()
-_state = {"speedtest_history": [], "speedtest_config": {"cron_minutes": DEFAULT_SPEEDTEST_CRON_MINUTES}}
+_state = {
+    "speedtest_history": [],
+    "speedtest_config": {"cron_minutes": DEFAULT_SPEEDTEST_CRON_MINUTES},
+    "metrics_history": {"cpu": [], "ram": [], "network": []},
+}
 
 
 def now_iso():
@@ -43,6 +49,15 @@ def _parse_iso_to_epoch(ts):
         return None
 
 
+def _to_float_or_none(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _load_state():
     global _state
     try:
@@ -52,6 +67,7 @@ def _load_state():
             raw = json.load(f)
         history = raw.get("speedtest_history", []) if isinstance(raw, dict) else []
         config_raw = raw.get("speedtest_config", {}) if isinstance(raw, dict) else {}
+        metrics_raw = raw.get("metrics_history", {}) if isinstance(raw, dict) else {}
         cron_minutes = int(config_raw.get("cron_minutes", DEFAULT_SPEEDTEST_CRON_MINUTES))
         cron_minutes = max(0, min(MAX_SPEEDTEST_CRON_MINUTES, cron_minutes))
         if not isinstance(history, list):
@@ -69,12 +85,42 @@ def _load_state():
                     "upload": entry.get("upload"),
                 }
             )
+        cpu_hist = metrics_raw.get("cpu", []) if isinstance(metrics_raw, dict) else []
+        ram_hist = metrics_raw.get("ram", []) if isinstance(metrics_raw, dict) else []
+        net_hist = metrics_raw.get("network", []) if isinstance(metrics_raw, dict) else []
+
+        def _clean_metric(rows, keys):
+            out = []
+            for entry in rows if isinstance(rows, list) else []:
+                if not isinstance(entry, dict) or not entry.get("ts"):
+                    continue
+                item = {"ts": entry["ts"]}
+                ok = True
+                for k in keys:
+                    num = _to_float_or_none(entry.get(k))
+                    if num is None:
+                        ok = False
+                        break
+                    item[k] = num
+                if ok:
+                    out.append(item)
+            return out[:METRICS_HISTORY_LIMIT]
+
         _state = {
             "speedtest_history": cleaned[:SPEEDTEST_HISTORY_LIMIT],
             "speedtest_config": {"cron_minutes": cron_minutes},
+            "metrics_history": {
+                "cpu": _clean_metric(cpu_hist, ["pct"]),
+                "ram": _clean_metric(ram_hist, ["pct"]),
+                "network": _clean_metric(net_hist, ["rx", "tx"]),
+            },
         }
     except Exception:
-        _state = {"speedtest_history": [], "speedtest_config": {"cron_minutes": DEFAULT_SPEEDTEST_CRON_MINUTES}}
+        _state = {
+            "speedtest_history": [],
+            "speedtest_config": {"cron_minutes": DEFAULT_SPEEDTEST_CRON_MINUTES},
+            "metrics_history": {"cpu": [], "ram": [], "network": []},
+        }
 
 
 def _save_state_locked():
@@ -121,6 +167,59 @@ def set_cron_minutes(value):
         _state["speedtest_config"]["cron_minutes"] = minutes
         _save_state_locked()
     return minutes
+
+
+def _append_metric_point_locked(series_name, point, keys):
+    _state.setdefault("metrics_history", {})
+    _state["metrics_history"].setdefault(series_name, [])
+    series = _state["metrics_history"][series_name]
+
+    now_ts = time.time()
+    last = series[-1] if series else None
+    if last:
+        last_epoch = _parse_iso_to_epoch(last.get("ts"))
+        if last_epoch is not None and (now_ts - last_epoch) < METRICS_MIN_SAMPLE_SECONDS:
+            for k in keys:
+                last[k] = point[k]
+            last["ts"] = point["ts"]
+            return
+
+    series.append(point)
+    if len(series) > METRICS_HISTORY_LIMIT:
+        del series[: len(series) - METRICS_HISTORY_LIMIT]
+
+
+def append_metrics_snapshot(payload):
+    ts = now_iso()
+    cpu_pct = _to_float_or_none(payload.get("cpuPct"))
+    ram_pct = _to_float_or_none(payload.get("ramPct"))
+    rx_bps = _to_float_or_none(payload.get("netRxBps"))
+    tx_bps = _to_float_or_none(payload.get("netTxBps"))
+
+    changed = False
+    with _state_lock:
+        if cpu_pct is not None:
+            _append_metric_point_locked("cpu", {"ts": ts, "pct": max(0.0, min(100.0, cpu_pct))}, ["pct"])
+            changed = True
+        if ram_pct is not None:
+            _append_metric_point_locked("ram", {"ts": ts, "pct": max(0.0, min(100.0, ram_pct))}, ["pct"])
+            changed = True
+        if rx_bps is not None and tx_bps is not None:
+            _append_metric_point_locked("network", {"ts": ts, "rx": max(0.0, rx_bps), "tx": max(0.0, tx_bps)}, ["rx", "tx"])
+            changed = True
+        if changed:
+            _save_state_locked()
+    return changed
+
+
+def get_metrics_history():
+    with _state_lock:
+        hist = _state.get("metrics_history", {})
+        return {
+            "cpu": list(hist.get("cpu", [])),
+            "ram": list(hist.get("ram", [])),
+            "network": list(hist.get("network", [])),
+        }
 
 
 def read_net_dev():
@@ -273,6 +372,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.run_speedtest()
         elif path == "/api/speedtest/history":
             self.serve_speedtest_history()
+        elif path == "/api/metrics/history":
+            self.serve_metrics_history()
         elif path == "/api/speedtest/config":
             self.serve_speedtest_config()
         elif path == "/api/network":
@@ -284,6 +385,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/speedtest/config":
             self.update_speedtest_config()
+        elif path == "/api/metrics/snapshot":
+            self.receive_metrics_snapshot()
         else:
             self.send_error(404)
 
@@ -297,6 +400,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def serve_speedtest_history(self):
         self._json({"history": get_speedtest_history(), "cronMinutes": get_cron_minutes()})
+
+    def serve_metrics_history(self):
+        self._json({"history": get_metrics_history()})
 
     def serve_speedtest_config(self):
         self._json({"cronMinutes": get_cron_minutes(), "maxCronMinutes": MAX_SPEEDTEST_CRON_MINUTES})
@@ -318,6 +424,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"error": "invalid cronMinutes"}, status=400)
             return
         self._json({"ok": True, "cronMinutes": cron_minutes})
+
+    def receive_metrics_snapshot(self):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query or "")
+        body = self._read_json_body()
+        payload = body if isinstance(body, dict) else {}
+        for key in ("cpuPct", "ramPct", "netRxBps", "netTxBps"):
+            if key in query and query.get(key):
+                payload[key] = query[key][0]
+        changed = append_metrics_snapshot(payload)
+        self._json({"ok": True, "stored": changed})
 
     def serve_network(self):
         stats = read_net_dev()
