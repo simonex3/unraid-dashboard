@@ -1,0 +1,7 @@
+services:
+  unraid-dashboard:
+    build: .
+    container_name: unraid-dashboard
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
