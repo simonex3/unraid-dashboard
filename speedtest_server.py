@@ -5,6 +5,8 @@ import json
 import time
 import ssl
 import http.client
+import subprocess
+import re
 
 PORT = 8889
 HOST = '127.0.0.1'
@@ -56,15 +58,23 @@ def pick_main_iface(stats):
     return candidates[0][0] if candidates else None
 
 
-def measure_ping():
-    ctx = ssl.create_default_context()
-    t0 = time.perf_counter()
-    conn = http.client.HTTPSConnection('speed.cloudflare.com', context=ctx, timeout=10)
-    conn.request('GET', '/__down?bytes=1024')
-    resp = conn.getresponse()
-    resp.read()
-    conn.close()
-    return round((time.perf_counter() - t0) * 1000)
+def measure_ping(host='1.1.1.1', count=5):
+    """ICMP ping via system ping command — accurate latency without TLS overhead.
+    Uses 1.1.1.1 (Cloudflare anycast) which routes to the nearest datacenter."""
+    try:
+        result = subprocess.run(
+            ['ping', '-c', str(count), '-W', '2', host],
+            capture_output=True, text=True, timeout=20
+        )
+        # Supports both formats:
+        #   iputils:  "rtt min/avg/max/mdev = 5.1/6.4/7.8/0.3 ms"
+        #   busybox:  "round-trip min/avg/max = 18.7/18.9/19.0 ms"
+        match = re.search(r'(?:rtt|round-trip) min/avg/max(?:/mdev)? = [\d.]+/([\d.]+)/', result.stdout)
+        if match:
+            return round(float(match.group(1)))
+    except Exception:
+        pass
+    return None
 
 
 def measure_download():
