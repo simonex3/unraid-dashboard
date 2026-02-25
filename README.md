@@ -23,48 +23,120 @@ A modern, single-page web dashboard for Unraid servers. Runs as a Docker contain
 - Unraid 6.12+ with GraphQL API enabled
 - Docker available on the Unraid host
 
+## Getting your Unraid API Key
+
+The dashboard connects to Unraid's built-in GraphQL API, which requires an API key for authentication. Here's how to get one:
+
+1. Open your Unraid WebUI in the browser (e.g. `http://192.168.1.100`)
+2. Go to **Settings** (top menu bar)
+3. Click **Management Access** in the left sidebar
+4. Scroll down to the **API Keys** section
+5. Click **Add key** (or use the existing key if one already exists)
+6. Give it a name (e.g. `dashboard`) and click **Create**
+7. Copy the generated key — it looks like a long string of letters and numbers
+
+> **Note:** The API key only works from within your local network. The dashboard itself runs on your Unraid server, so this is fine by default.
+
+> **Unraid version:** API Keys require Unraid **6.12 or newer**. If you don't see the API Keys section, update Unraid first.
+
 ## Configuration
 
-Before building, edit **two lines** in `index.html`:
+Open `index.html` in any text editor and replace the placeholder on **line ~615**:
 
 ```js
-// Line ~615 in index.html
-const UNRAID_API_KEY = 'YOUR_UNRAID_API_KEY';
+// ── KONFIGURATION ─────────────────────────────────────────────────
+// API Key: Unraid → Einstellungen → Management Access → API Key
+const UNRAID_API_KEY = 'YOUR_UNRAID_API_KEY';  // ← paste your key here
 ```
 
-**Where to find your API key:**
-Unraid WebUI → Settings → Management Access → API Key
+That's the only change needed. The server IP is detected automatically from the browser URL.
 
-The server IP is detected automatically from the browser URL — no need to configure it.
+> **Tip:** Use a simple text editor like Notepad (Windows), TextEdit (Mac) or nano (Linux). Avoid Word or other rich-text editors as they may corrupt the file.
 
-## Quick Start (docker-compose)
+## Installation
+
+### Option A — Deploy directly on your Unraid server (recommended)
+
+This runs the build on the Unraid server itself. You need SSH access (enabled by default on Unraid).
+
+**Step 1 — Download the files onto your Unraid server:**
+```bash
+# Run this in an SSH session on your Unraid server (or via the Unraid terminal)
+mkdir -p /boot/config/plugins/dockerMan/unraid-dashboard
+cd /boot/config/plugins/dockerMan/unraid-dashboard
+
+# Download all required files
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/index.html
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/Dockerfile
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/nginx.conf
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/speedtest_server.py
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/start.sh
+```
+
+**Step 2 — Add your API key:**
+```bash
+# Open index.html and replace YOUR_UNRAID_API_KEY with your real key
+nano index.html
+# Search for: const UNRAID_API_KEY = 'YOUR_UNRAID_API_KEY';
+# Replace:    const UNRAID_API_KEY = 'abc123...your-real-key...';
+# Save with Ctrl+O, exit with Ctrl+X
+```
+
+**Step 3 — Build and start the container:**
+```bash
+docker build -t unraid-dashboard:latest . && \
+docker run -d --name unraid-dashboard --restart=unless-stopped \
+  --network host unraid-dashboard:latest
+```
+
+Dashboard is now available at: **`http://YOUR_UNRAID_IP:8888`**
+
+---
+
+### Option B — Clone & deploy from your PC
+
+Requires Git and SSH access to your Unraid server.
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/unraid-dashboard.git
+# 1. Clone the repo on your PC
+git clone https://github.com/simonex3/unraid-dashboard.git
 cd unraid-dashboard
 
-# 2. Set your API key in index.html (see Configuration above)
+# 2. Add your API key (edit line ~615 in index.html)
 
-# 3. Build and start
-docker compose up -d
-```
-
-Dashboard is available at: `http://YOUR_UNRAID_IP:8888`
-
-## Manual Deploy
-
-```bash
-# Copy files to Unraid
+# 3. Copy files to Unraid and build
 scp index.html Dockerfile nginx.conf speedtest_server.py start.sh \
     root@YOUR_UNRAID_IP:/boot/config/plugins/dockerMan/unraid-dashboard/
 
-# Build and run on Unraid
 ssh root@YOUR_UNRAID_IP "cd /boot/config/plugins/dockerMan/unraid-dashboard && \
     docker build -t unraid-dashboard:latest . && \
     docker stop unraid-dashboard 2>/dev/null; docker rm unraid-dashboard 2>/dev/null; \
     docker run -d --name unraid-dashboard --restart=unless-stopped \
-    -p 8888:8888 unraid-dashboard:latest"
+    --network host unraid-dashboard:latest"
+```
+
+> **Why `--network host`?**
+> The network graph reads live RX/TX data directly from the host system. Without this flag, the container would only see its own isolated network traffic instead of the real server traffic.
+
+---
+
+### Updating to a newer version
+
+```bash
+# On your Unraid server (SSH):
+cd /boot/config/plugins/dockerMan/unraid-dashboard
+
+# Re-download changed files (keep your index.html with your API key!)
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/Dockerfile
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/nginx.conf
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/speedtest_server.py
+curl -LO https://github.com/simonex3/unraid-dashboard/raw/master/start.sh
+
+# Rebuild
+docker build -t unraid-dashboard:latest . && \
+docker stop unraid-dashboard && docker rm unraid-dashboard && \
+docker run -d --name unraid-dashboard --restart=unless-stopped \
+  --network host unraid-dashboard:latest
 ```
 
 ## How it Works
