@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal HTTP server on port 8889 that runs a speedtest from the server side."""
+"""Minimal HTTP server on port 8889 — speedtest + network stats."""
 import http.server
 import json
 import time
@@ -8,6 +8,52 @@ import http.client
 
 PORT = 8889
 HOST = '127.0.0.1'
+
+# Interfaces to prefer for network stats (in order)
+_NET_PREFER = ['bond0', 'eth0', 'eth1', 'ens3', 'ens0', 'enp3s0', 'enp0s3']
+# Interfaces / prefixes to always ignore
+_NET_IGNORE  = {'lo', 'tunl0', 'virbr0', 'docker0', 'tailscale1'}
+_NET_IGNORE_PFX = ('veth', 'br-', 'vnet', 'tun', 'tap')
+
+
+def read_net_dev():
+    """Parse /proc/net/dev and return {iface: {rxBytes, txBytes}}.
+    Prefers /host-proc-net-dev (host-mounted) over the container's own /proc/net/dev."""
+    result = {}
+    try:
+        path = '/host-proc-net-dev' if __import__('os').path.exists('/host-proc-net-dev') else '/proc/net/dev'
+        with open(path) as f:
+            for line in f.readlines()[2:]:  # skip 2-line header
+                if ':' not in line:
+                    continue
+                name, data = line.split(':', 1)
+                name = name.strip()
+                fields = data.split()
+                if len(fields) < 9:
+                    continue
+                result[name] = {
+                    'rxBytes': int(fields[0]),
+                    'txBytes': int(fields[8]),
+                }
+    except Exception:
+        pass
+    return result
+
+
+def pick_main_iface(stats):
+    """Return the name of the primary network interface."""
+    # 1. preferred list
+    for pref in _NET_PREFER:
+        if pref in stats:
+            return pref
+    # 2. first non-ignored interface with traffic, sorted by rx+tx desc
+    candidates = [
+        (k, v['rxBytes'] + v['txBytes'])
+        for k, v in stats.items()
+        if k not in _NET_IGNORE and not k.startswith(_NET_IGNORE_PFX)
+    ]
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[0][0] if candidates else None
 
 
 def measure_ping():
@@ -61,8 +107,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/api/speedtest':
             self.run_speedtest()
+        elif self.path == '/api/network':
+            self.serve_network()
         else:
             self.send_error(404)
+
+    def serve_network(self):
+        stats = read_net_dev()
+        iface = pick_main_iface(stats)
+        if iface:
+            payload = {
+                'interface': iface,
+                'rxBytes':   stats[iface]['rxBytes'],
+                'txBytes':   stats[iface]['txBytes'],
+                'ts':        time.time(),
+            }
+        else:
+            payload = {'error': 'no interface found'}
+        self._json(payload)
 
     def run_speedtest(self):
         result = {'ping': None, 'download': None, 'upload': None}
@@ -78,8 +140,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             result['upload'] = measure_upload()
         except Exception:
             pass
+        self._json(result)
 
-        body = json.dumps(result).encode()
+    def _json(self, obj):
+        body = json.dumps(obj).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))

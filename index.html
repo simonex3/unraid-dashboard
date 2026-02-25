@@ -747,23 +747,22 @@
       }
     }
 
-    // RAM — in Unraid: memory.used = total - free (inkl. buffcache)
-    // Echte App-Nutzung = used - buffcache
+    // RAM — percentTotal aus der API = (MemTotal - MemAvailable) / MemTotal (korrekte Metrik)
+    // memory.used enthält buffcache (= total - free), daher NICHT für Prozent nutzen
     if (memory) {
-      const realUsed = Math.max(0, memory.used - memory.buffcache);
-      const usedPct  = memory.total > 0 ? Math.round((realUsed / memory.total) * 100) : 0;
-      const available = memory.free + memory.buffcache; // reclaimable
+      const usedPct = Math.round(memory.percentTotal);
+      const appMem  = Math.max(0, memory.used - memory.buffcache); // reine App-Nutzung in Bytes
 
       setGauge('g-ram', usedPct);
       const ramEl = document.getElementById('ram-pct');
       ramEl.textContent = usedPct + '%';
       ramEl.style.color = pctColor(usedPct);
 
-      document.getElementById('ram-used-lbl').textContent = fmtBytes(realUsed) + ' belegt';
+      document.getElementById('ram-used-lbl').textContent = fmtBytes(memory.total) + ' gesamt';
       document.getElementById('ram-desc').innerHTML =
-        `${fmtBytes(memory.total)} Gesamt<br>` +
-        `<span style="color:var(--green)">${fmtBytes(available)} verfügbar</span><br>` +
-        `${fmtBytes(memory.buffcache)} Cache`;
+        `<span style="color:var(--text)">${fmtBytes(appMem)} Apps</span><br>` +
+        `${fmtBytes(memory.buffcache)} Cache<br>` +
+        `${fmtBytes(memory.free)} frei`;
 
       document.getElementById('c-ram').textContent = usedPct + '%';
       document.getElementById('c-ram').style.color = pctColor(usedPct);
@@ -779,23 +778,24 @@
     }
   }
 
-  // ── network ──────────────────────────────────────────────────────
+  // ── network — reads /proc/net/dev via Python backend ─────────────
   async function loadNetwork() {
     try {
-      // Try metrics.network first, then standalone network query
-      let ifaces = null;
-      try {
-        const d = await gql('query { network { interfaces { name rxBytes txBytes } } }');
-        ifaces = d?.network?.interfaces;
-      } catch {
-        try {
-          const d2 = await gql('query { metrics { network { interfaces { name rxBytes txBytes } } } }');
-          ifaces = d2?.metrics?.network?.interfaces;
-        } catch { /* not available */ }
-      }
-      processNetworkData(ifaces);
+      const port = location.port || '8888';
+      const resp = await fetch(
+        `${location.protocol}//${location.hostname}:${port}/api/network`,
+        { cache: 'no-store' }
+      );
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      // Convert single-interface response to the array format processNetworkData expects
+      processNetworkData([{ name: data.interface, rxBytes: data.rxBytes, txBytes: data.txBytes }]);
     } catch(e) {
       console.warn('network', e);
+      const unavail = document.getElementById('net-unavail');
+      unavail.innerHTML = '&#9888; Netzwerk-Backend nicht erreichbar';
+      unavail.style.display = 'block';
     }
   }
 

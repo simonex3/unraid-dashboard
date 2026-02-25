@@ -62,7 +62,7 @@ query { metrics { network { interfaces { name rxBytes txBytes } } } }
 ## Offene TODOs
 - Netzwerk-Query gegen API verifizieren (rxBytes/txBytes Feldnamen prüfen)
 - Speedtest: Server-seitige Historie (aktuell nur localStorage = browserseitig)
-- GitHub Remote noch nicht verbunden (gh CLI nicht installiert)
+- GitHub Remote: https://github.com/simonex3/unraid-dashboard (privat, verbunden)
 
 ## GitHub Workflow
 
@@ -97,7 +97,8 @@ ssh root@192.168.178.112 "cd /boot/config/plugins/dockerMan/unraid-dashboard && 
     docker build -t unraid-dashboard:latest . && \
     docker stop unraid-dashboard && \
     docker rm unraid-dashboard && \
-    docker run -d --name unraid-dashboard --restart=unless-stopped -p 8888:8888 unraid-dashboard:latest"
+    docker run -d --name unraid-dashboard --restart=unless-stopped \
+    --network host unraid-dashboard:latest"
 ```
 
 ## Architektur / Design-Entscheidungen
